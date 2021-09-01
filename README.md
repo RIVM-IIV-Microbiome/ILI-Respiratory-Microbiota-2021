@@ -1,4 +1,4 @@
-## Study Title:    
+
 
 ### Associations and recovery dynamics of the nasopharyngeal microbiota during influenza-like illness in the aging population   
 
