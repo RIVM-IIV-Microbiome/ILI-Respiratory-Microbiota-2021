@@ -6,6 +6,10 @@ Sudarshan A. Shetty<sup>1,2</sup>, Josine van Beek<sup>1</sup>, Elske Bijvank<su
 
 <sup>1</sup> Center for Infectious Disease Control, National Institute for Public Health and the Environment, The Netherlands.   
 <sup>2</sup>Department of Medical Microbiology and Infection prevention, Virology and Immunology research Group, University Medical Center Groningen, Groningen, Netherlands   
-<sup>*</sup>Corresponding author: Susana Fuentes; susana.fuentes@rivm.nl   
+<sup>*</sup>Corresponding author: Susana Fuentes; susana.fuentes[@]rivm[dot]nl   
 
-
+For information realted to codes and analysis:
+Sudarshan A. Shetty; sudarshan.shetty[@]rivm[dot]nl  
+For information realted to participants and related metadata:
+Debbie van Baarle; d.van.baarle[@]umcg[dot]nl  
+Josine van Beek; josine.van.beek[@]rivm[dot]nl 
