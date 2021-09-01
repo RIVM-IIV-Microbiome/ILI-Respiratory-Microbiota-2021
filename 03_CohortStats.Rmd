@@ -1,0 +1,683 @@
+---
+title: "The nasopharyngeal microbiota of elderly subjects with and without influenza-like illness"
+subtitle: "Cohort Stats"
+author: "Sudarshan A. Shetty"
+date: "`r date()`"
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 2
+    toc_float: true
+editor_options: 
+  chunk_output_type: console
+---
+
+This document describes the participant data.  
+
+# Analysis  
+**Load pkgs**    
+```{r libraries, warning=FALSE, message=FALSE}
+library(readr)
+library(decontam)
+#BiocManager::install("DECIPHER")
+library(microbiome); 
+#packageVersion("microbiome")
+library(phyloseq)
+#packageVersion("phyloseq")
+library(dplyr)
+#packageVersion("dplyr")
+library(ggpubr)
+#packageVersion("ggpubr")
+library(patchwork)
+#packageVersion("patchwork")
+library(microbiomeutilities)
+library(pheatmap)
+library(factoextra)
+library(janitor)
+
+```
+
+Create directory to store output from investigation of controls.   
+```{r dir, eval=TRUE}
+dir.create("03_cohort")
+dir.create("03_cohort/figs")
+dir.create("03_cohort/tabs")
+#dir.create("tabs")
+```
+
+Color codes for each condition.  
+```{r}
+dis_col <- c(acute_ili="#6883ba", 
+             control= "#166f65", 
+             `NA`="black",
+             acute_ili_14_days = "#6d597a", 
+             control_14_days = "#87d2c9", 
+             acute_ili_recovery = "#e56b6f",
+             ili="steelblue") 
+
+```
+
+
+## read clean pseq 
+```{r}
+
+ps.main <- readRDS("data/rds/ps.clean.rds")
+
+length(unique(sample_data(ps.main)$participant_id))
+
+```
+
+Three participants ELD156, ELD208, ELD39 have samples spread across multiple years as part atleast one ili and one control timepoint. These will will be removed from this paper. 
+
+```{r , eval=TRUE}
+
+ps.main <- subset_samples(ps.main, !(participant_id %in% c("ELD156", "ELD208", "ELD39")))
+
+ps.main <- prune_taxa(taxa_sums(ps.main) >0, ps.main)
+
+# Save this for rest of the anlaysis. 
+saveRDS(ps.main, "data/rds/ps.clean.rds")
+
+```
+
+
+```{r}
+print_ps(ps.main)
+```
+
+
+## Quick check on some variables  
+```{r source-info }
+
+knitr::kable(table(meta(ps.main)$source,meta(ps.main)$condition_group))
+knitr::kable(table(meta(ps.main)$source,meta(ps.main)$moraxella_catarrhalis_2014))
+```
+
+
+Check per subject condition_status sampled. 
+```{r subj-source}
+metadf.so <- meta(ps.main) %>% 
+   group_by(participant_id) %>% arrange(desc(condition_status)) %>% 
+                    summarise(samples_for = paste(unique(condition_status), collapse = ","))
+knitr::kable(table(metadf.so$samples_for))
+```
+
+
+Check for distribution of age and BMI 
+```{r age-bmi-dist, fig.height=4, fig.width=6, fig.align="center"}
+metadf <- meta(ps.main)
+bmi_hist <- gghistogram(metadf, "BMI_2014", 
+                        fill="condition_status", 
+                        palette = dis_col, alpha=0.25,
+                        add_density = TRUE)
+age_hist <- gghistogram(metadf, "age_yrs_oct2014", 
+                        fill="condition_status", 
+                        palette = dis_col, alpha=0.25,
+                        add_density = TRUE)
+
+bmi_hist + age_hist + plot_annotation(tag_levels = "A") + 
+  plot_layout(guides="collect") & theme(legend.position = 'top')  
+ggsave("03_cohort/figs/bmi_age_hist.pdf", height = 4, width = 10)
+```
+
+```{r sex-condition-grp, fig.height=4, fig.width=4}
+
+p <- plot_frequencies(sample_data(ps.main), "condition_group", "gender")
+print(p + ggtitle("gender"))
+ggsave("03_cohort/figs/gender.pdf", height = 4, width = 6)
+
+knitr::kable(table(sample_data(ps.main)$condition_group, sample_data(ps.main)$gender ))
+
+```
+
+## Pick metadata  
+```{r}
+
+demo_data <- meta(ps.main)
+
+# make a list of participants at different sampling times. 
+# control
+#total unique
+length(unique(subset(demo_data, condition_group=="control")$participant_id))
+ctrl.v1.participants <- subset(demo_data, condition_status=="control")$participant_id
+ctrl.v2.participants <- subset(demo_data, condition_status=="control_14_days")$participant_id
+
+# control
+control.v1.df <- subset(demo_data, condition_status=="control")
+control.v2.df <- subset(demo_data, condition_status=="control_14_days")
+
+# now remove from v2 participants from v1
+control.v2.df.s <- control.v2.df %>% 
+  filter(!participant_id %in% ctrl.v1.participants)
+
+control_df <- control.v1.df %>% bind_rows(control.v2.df.s)
+
+# ILI 
+#total unique
+length(unique(subset(demo_data, condition_group=="ili")$participant_id))
+ili.v1.participants <- subset(demo_data, condition_status=="acute_ili")$participant_id
+ili.v2.participants <- subset(demo_data, condition_status=="acute_ili_14_days")$participant_id
+ili.v3.participants <- subset(demo_data, condition_status=="acute_ili_recovery")$participant_id
+
+
+ili.v1.df <- subset(demo_data, condition_status=="acute_ili")
+ili.v2.df <- subset(demo_data, condition_status=="acute_ili_14_days")
+ili.v3.df <- subset(demo_data, condition_status=="acute_ili_recovery")
+
+# now remove from v2 participants from v1
+ili.v2.df.s <- ili.v2.df %>% 
+  filter(!participant_id %in% ili.v1.participants)
+
+# now remove from v3 participants from v1
+ili.v3.df.s <- ili.v3.df %>% 
+  filter(!participant_id %in% ili.v1.participants)
+
+# now remove from v3 participants from v2
+ili.v3.df.s <- ili.v3.df.s %>% 
+  filter(!participant_id %in% ili.v2.df.s$participant_id)
+# Combine V1 V2 V3 ILI
+iliv1v2v3 <-  bind_rows(ili.v1.df, ili.v2.df.s, ili.v3.df.s)
+
+# Combine ILI and Control
+demo_data <- bind_rows(iliv1v2v3,control_df)
+write.csv(demo_data, "03_cohort/demo_data_cohort.csv")
+saveRDS(demo_data, "03_cohort/demo_data_cohort.rds")
+table(iliv1v2v3$moraxella_catarrhalis_2014, iliv1v2v3$condition_status)
+
+```
+
+```{r}
+
+respiratory_disease <- demo_data %>% 
+  group_by(condition_status, respiratory_disease_2014) %>% 
+  tally() %>% 
+  mutate(rel.freq = round(100 * n/sum(n), 1),
+         rel.freq.pct = paste0(round(100 * n/sum(n), 0), "%"))
+write_csv(respiratory_disease,"03_cohort/tabs/respiratory_disease.csv")
+
+
+comorbidities <- demo_data %>% 
+  group_by(condition_status, comorbidities_2014) %>% 
+  tally() %>% 
+  mutate(rel.freq = round(100 * n/sum(n), 1),
+         rel.freq.pct = paste0(round(100 * n/sum(n), 0), "%"))
+write_csv(comorbidities,"03_cohort/tabs/comorbidities.csv")
+```
+
+# Stats on metadata  
+
+```{r}
+library(coin)
+library(xlsx)
+```
+
+## Create participant level data  
+
+```{r}
+#colnames(demo_data)
+table(demo_data$condition_status)
+# get unique participants
+sub_part <- unique(demo_data$participant_id)
+
+sub_data <- demo_data %>% distinct(participant_id, .keep_all = TRUE)
+
+table(sub_data$condition_status)
+dim(sub_data)
+dim(demo_data)
+```
+
+```{r}
+sub_data <- remove_empty(sub_data, which = c("rows","cols"))
+
+```
+
+
+# Check  
+
+Identify variables with less or no difference  
+```{r}
+table(sub_data$transplant_2014, useNA = "always")
+table(sub_data$hiv_infection_2014, useNA = "always")
+table(sub_data$functional_asplenia_2014, useNA = "always")
+table(sub_data$leukemia_2014, useNA = "always")
+table(sub_data$lymphatic_cancer_2014, useNA = "always")
+```
+
+```{r}
+sub_data <- sub_data %>% 
+  dplyr::select(-c(transplant_2014, hiv_infection_2014,functional_asplenia_2014,leukemia_2014,lymphatic_cancer_2014))
+```
+
+# Group as ILI or No-ILI
+```{r}
+#sub_data$condition_group
+
+good.index <- sub_data$participant_id[which(!is.na(sub_data$numb_of_symptoms))]
+sub_data$ILI_ja_nee <- 0
+sub_data$ILI_ja_nee[which(sub_data$participant_id %in% good.index)] <- 1
+```
+
+
+# Select variables of interest
+```{r}
+main_var <- c("ILI_ja_nee","gender", "age_yrs_oct2014")
+comord.vars <- c("BMI_2014","respiratory_disease_2014", "comorbidities_2014",
+                 "chronic_cvd_2014","Diabetes_2014", "autoimmune_disease_2014", 
+                 "other_malignancies", "Roken_2014")
+
+med.vars <- c("ace_inhibitors_2014", "statins_2014", "ppi_2014",
+              "alpa_beta_blockers_2014","antimicrobials_2014", "arbs_2014", "insulin_2014",
+              "Corticosteroiden_2014", "Antiepileptica_2014", "Antihistaminica_2014",
+              "analgesics_2014", "vaccinated_2014", "flu_shot_2014_2015", "denzodiazepine_2014",
+              "Antidepressiva_2014", "Glucoseverlagend_2014", "Stollingsremmers_2014", "Calciumregulatie_2014",
+              "AstmaCOPD_2014", "number_of_medications_2014", "antibioitics_2014")
+patho.vars <- colnames(sub_data)[134:155]
+
+
+var.of.int <-  c(main_var,comord.vars,med.vars,patho.vars)
+# create the final data set:
+data.to.infer <- sub_data[, var.of.int]
+```
+
+## Age BMI stats
+
+```{r}
+# check age from No-ILI 
+round(mean(subset(data.to.infer, ILI_ja_nee == 0)$age_yrs_oct2014),1)
+round(sd(subset(data.to.infer, ILI_ja_nee == 0)$age_yrs_oct2014),1)
+
+# check age from ILI 
+round(mean(subset(data.to.infer, ILI_ja_nee == 1)$age_yrs_oct2014),1)
+round(sd(subset(data.to.infer, ILI_ja_nee == 1)$age_yrs_oct2014),1)
+
+# check bmi from No-ILI 
+round(mean(subset(data.to.infer, ILI_ja_nee == 0)$BMI_2014),1)
+round(sd(subset(data.to.infer, ILI_ja_nee == 0)$BMI_2014),1)
+
+# check bmi from ILI 
+round(mean(subset(data.to.infer, ILI_ja_nee == 1)$BMI_2014, na.rm = T),1)
+round(sd(subset(data.to.infer, ILI_ja_nee == 1)$BMI_2014,na.rm = T),1)
+
+# check gender  
+table(subset(data.to.infer, ILI_ja_nee == 0)$gender)
+table(subset(data.to.infer, ILI_ja_nee == 1)$gender)
+```
+
+
+```{r eval=FALSE}
+##################
+# overview of new variables
+table(sub_data$antimicrobials_2014, sub_data$ILI_ja_nee, useNA = "always")
+table(sub_data$antimicrobials_2014, sub_data$antimicrobial_during_sampling_2014, useNA = "always")
+table(data.to.infer$antimicrobial_during_sampling_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+table(data.to.infer$antibioitics_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+
+```
+
+```{r}
+###################
+# Create age.group:
+range(data.to.infer$age_yrs_oct2014)
+age.breaks <- seq(60,90,5)
+data.to.infer <- base::transform(data.to.infer,
+                           age.group=cut(age_yrs_oct2014, 
+                                         breaks=age.breaks, 
+                                         right=TRUE, 
+                                         include.lowest=TRUE))
+data.to.infer$age.group <- as.character(data.to.infer$age.group); table(data.to.infer$age.group)
+#
+```
+
+```{r}
+#################################
+# Create strata of "confounders":
+#names(data.to.infer)[2] <- "gender"
+confounders <- c("gender","age.group")
+name.of.stratification <- "gender-age-group"
+
+aux.data.set <- subset(data.to.infer,select="age.group")
+aux.data.set <- base::transform(aux.data.set,stratum=rep(NA,nrow(aux.data.set)))
+for(i in (1:nrow(aux.data.set))){
+  aux.data.set[i,]$stratum <- paste(aux.data.set[i,-length(aux.data.set)],collapse="/")
+}
+aux.data.set$stratum <- as.character(aux.data.set$stratum)
+# str(aux.data.set); head(aux.data.set)
+#
+data.to.infer <- base::transform(data.to.infer,stratum=aux.data.set$stratum)
+data.to.infer$stratum <- as.character(data.to.infer$stratum); table(data.to.infer$stratum)
+# names(data.set); str(data.set); head(data.set)
+
+```
+
+```{r}
+frequency.of.strata <- table(data.to.infer$stratum); mean(frequency.of.strata); frequency.of.strata
+#
+data.to.infer$stratum <- as.factor(data.to.infer$stratum)
+
+nominal.bound.on.FDR <- 0.2
+```
+
+```{r}
+
+colnames(data.to.infer)[1:10]
+set.seed(1977)
+B <- 100000
+#
+tests <- data.frame(var.1 = c("gender",
+                              "age_yrs_oct2014",
+                              "BMI_2014"),
+                    var.2 = c("ILI_ja_nee", "ILI_ja_nee", "ILI_ja_nee"),
+                    p.value = c(as.numeric(fisher.test(data.to.infer$gender,                                                       as.factor(data.to.infer$ILI_ja_nee))$p.value),
+                                as.numeric(t.test(age_yrs_oct2014~ILI_ja_nee, 
+                                                  data =  data.to.infer)$p.value),
+                                as.numeric(pvalue(independence_test(BMI_2014~ ILI_ja_nee, data=data.to.infer,distribution=approximate(B))))),
+                    test = c("Fisher","T test", "Sum statistic-no blocking by stratum"))
+
+tests_1 <- tests
+
+#
+# test separately information related to antibiotica use:
+table(data.to.infer$antibioitics_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+table(data.to.infer$antimicrobials_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+response <- data.to.infer[,"antimicrobials_2014"]
+CHM.test <- cmh_test(as.factor(response)~as.factor(ILI_ja_nee)|stratum, data=data.to.infer,distribution=approximate(B))
+p.value <- as.numeric(pvalue(CHM.test))
+
+tests <- data.frame(var.1 = c("antibioitics_2014","antimicrobials_2014"),
+                       var.2 = c("ILI_ja_nee", "ILI_ja_nee"),
+                       p.value = c(as.numeric(pvalue(cmh_test  (as.factor(data.to.infer[,"antibioitics_2014"])~as.factor(ILI_ja_nee)|stratum, data=data.to.infer,distribution=approximate(B)))),                                   as.numeric(pvalue(cmh_test(as.factor(data.to.infer[,"antimicrobials_2014"])~as.factor(ILI_ja_nee)|stratum, data=data.to.infer,distribution=approximate(B))))),
+                       test = c("Cochran-Mantel-Haenszel","Cochran-Mantel-Haenszel"))
+print(tests)
+```
+
+
+
+```{r}
+#transplant_2014 (11) number_cigarettes_week_2014 (19) antimicrobial_during_sampling_2014(27)
+data.to.infer.ori <- data.to.infer
+data.to.infer.ori <- remove_constant(data.to.infer.ori)
+
+#data.to.infer.ori <- data.to.infer
+#colnames(data.to.infer.ori)
+#colnames(data.to.infer)
+data.to.infer <- data.to.infer.ori %>% dplyr::select(-all_of(patho.vars))
+table(data.to.infer.ori$duration_symptom_before_collection)
+#data.to.infer <- data.to.infer.ori
+#data.to.infer <- data.to.infer[,-c(12,)] #,51,52,53,
+tests <- NULL 
+for (i in 5:(ncol(data.to.infer)-3)) {
+  response <- data.to.infer[,i]
+  CHM.test <- cmh_test(as.factor(response)~as.factor(ILI_ja_nee)|stratum, data=data.to.infer,distribution=approximate(B))
+  p.value <- as.numeric(pvalue(CHM.test))
+  
+  output.p <- data.frame(var.1=paste0(names(data.to.infer)[i]),
+                         var.2="ILI_ja_nee",
+                         p.value=p.value,
+                         test="Cochran-Mantel-Haenszel")
+  print(output.p)
+  tests <- rbind(tests,output.p)      
+}
+tests 
+```
+
+```{r}
+multiple.tests <- tests
+multiple.tests <- multiple.tests[order(multiple.tests$p.value),]; row.names(multiple.tests) <- NULL
+aux.histogram <- hist(multiple.tests$p.value,plot=T)
+gamma.hat <- min(1,aux.histogram$density[length(aux.histogram$density)]); gamma.hat
+multiple.tests <- base::transform(multiple.tests,rank=(1:nrow(multiple.tests)))
+bound.FDR <- nrow(multiple.tests)*multiple.tests$p.value/(1:nrow(multiple.tests))
+better.bound.FDR <- gamma.hat*nrow(multiple.tests)*multiple.tests$p.value/(1:nrow(multiple.tests))
+multiple.tests <- base::transform(multiple.tests,
+                            bound.FDR=bound.FDR,
+                            better.bound.FDR=better.bound.FDR)
+multiple.tests
+multiple.tests.medictions <- multiple.tests
+```
+
+```{r}
+file.name <- paste("03_cohort/tabs/associations.between.medication.and.ILI.status.txt",sep=".")
+write.table(multiple.tests,file=file.name,row.names=FALSE,sep=";")
+
+file.name <- paste("03_cohort/tabs/associations.between.medication.and.ILI.status.xlsx",sep=".")
+write.xlsx(multiple.tests,file=file.name,row.names=FALSE)
+
+```
+
+ 
+## pathogens  
+```{r}
+data.to.infer.vir <- data.to.infer.ori[, c(main_var,patho.vars,"stratum")]
+data.to.infer.vir <- replace(data.to.infer.vir, data.to.infer.vir == "unknown", 2)
+data.to.infer.vir <- replace(data.to.infer.vir, data.to.infer.vir ==  3, 2)
+
+#summary(data.to.infer.vir)
+data.to.infer.vir <- remove_constant(data.to.infer.vir)
+
+data.to.infer.vir <- data.to.infer.vir[,-c(2,3,14,17)] #14 influenza_type_2014
+colnames(data.to.infer.vir)
+table(data.to.infer.vir$rhinovirus_2014)
+#data.to.infer.vir <- data.to.infer.vir[,-c(1:3,25,20)]
+
+test_vir <- c()
+for (i in 2:(ncol(data.to.infer.vir)-1)) {
+  response <- data.to.infer.vir[,i]
+  print(colnames(data.to.infer.vir)[i])
+  CHM.test <- cmh_test(as.factor(response) ~ as.factor(ILI_ja_nee)|stratum, 
+                       data=data.to.infer.vir, 
+                       distribution=approximate(B))
+  
+  p.value <- as.numeric(pvalue(CHM.test))
+  
+  output.p <- data.frame(var.1=paste0(names(data.to.infer.vir)[i]),
+                         var.2="ILI_ja_nee",
+                         p.value=p.value,
+                         test="Cochran-Mantel-Haenszel")
+  print(output.p)
+  test_vir <- rbind(test_vir,output.p)      
+}
+
+multiple.tests <- test_vir
+multiple.tests <- multiple.tests[order(multiple.tests$p.value),]; row.names(multiple.tests) <- NULL
+aux.histogram <- hist(multiple.tests$p.value,plot=T)
+gamma.hat <- min(1,aux.histogram$density[length(aux.histogram$density)]); gamma.hat
+multiple.tests <- base::transform(multiple.tests,rank=(1:nrow(multiple.tests)))
+bound.FDR <- nrow(multiple.tests)*multiple.tests$p.value/(1:nrow(multiple.tests))
+better.bound.FDR <- gamma.hat*nrow(multiple.tests)*multiple.tests$p.value/(1:nrow(multiple.tests))
+multiple.tests <- base::transform(multiple.tests,
+                            bound.FDR=bound.FDR,
+                            better.bound.FDR=better.bound.FDR)
+multiple.tests
+
+file.name <- paste("03_cohort/tabs/associations.between.pathogens.and.ILI.status.txt",sep=".")
+write.table(multiple.tests,file=file.name,row.names=FALSE,sep=";")
+
+file.name <- paste("03_cohort/tabs/associations.between.pathogens.and.ILI.status.xlsx",sep=".")
+write.xlsx(multiple.tests,file=file.name,row.names=FALSE)
+
+```
+
+
+```{r eval=FALSE}
+data.to.infer.numbs <- data.to.infer.vir[,c(1:3,26,27,28)]
+
+#test for number of virus seperately
+#"numb_pathogens" "numb_viruses"   "numb_bacteria"  "ILI_ja_nee"     "age.group"      "stratum" 
+
+data.to.infer.numbs <- replace(data.to.infer.numbs, data.to.infer.numbs == "unknown", 0)
+
+var1.numb_pathogens <- cmh_test(as.factor(data.to.infer.numbs[,1])~as.factor(ILI_ja_nee)|stratum, data=data.to.infer.numbs,distribution=approximate(B))
+var1.numb_viruses <- cmh_test(as.factor(data.to.infer.numbs[,2])~as.factor(ILI_ja_nee)|stratum, data=data.to.infer.numbs,distribution=approximate(B))
+var1.numb_bacteria <- cmh_test(as.factor(data.to.infer.numbs[,3])~as.factor(ILI_ja_nee)|stratum, data=data.to.infer.numbs,distribution=approximate(B))
+
+
+```
+
+### Medications summary  
+```{r}
+
+library(arsenal)
+table_one <- tableby(ILI_ja_nee ~ ., data = data.to.infer)
+#head(table_one)
+
+write2word(table_one, "~/respiratory/RespiratoryMicrobiotaElderly/03_cohort/arsenal_table.doc",
+  keep.md = TRUE,
+  quiet = TRUE, # passed to rmarkdown::render
+  title = "Summary from data.to.infer") # passed to summary.tableby
+
+
+```
+
+
+### pathogens summary  
+```{r}
+
+table_two <- tableby(ILI_ja_nee ~ ., data = data.to.infer.vir)
+#head(table_one)
+
+write2word(table_two, "~/respiratory/RespiratoryMicrobiotaElderly/03_cohort/arsenal_table_pathogens.doc",
+  keep.md = TRUE,
+  quiet = TRUE, # passed to rmarkdown::render
+  title = "Summary from data.to.infer.vir") # passed to summary.tableby
+
+
+```
+
+
+## Table of baseline   
+```{r}
+table(data.to.infer$comorbidities_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+#Autoimmune disease
+table(data.to.infer$autoimmune_disease_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+#Cardiovascular disease
+table(data.to.infer$chronic_cvd_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+#Diabetes
+table(data.to.infer$Diabetes_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+#Malignancies
+table(data.to.infer$other_malignancies, data.to.infer$ILI_ja_nee, useNA = "always")
+
+#Renal disease
+#table(data.to.infer$chronic_kidney_disease_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+#Respiratory disease
+table(data.to.infer$respiratory_disease_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+#Smoking
+table(data.to.infer$Roken_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+#Influenza vaccination
+table(data.to.infer$flu_shot_2014_2015, data.to.infer$ILI_ja_nee, useNA = "always")
+#ACE inhibitors
+table(data.to.infer$ace_inhibitors_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+#Alpha-/betablocker
+table(data.to.infer$alpa_beta_blockers_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+#Analgesic
+table(data.to.infer$analgesics_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+#Antidepressants
+table(data.to.infer$Antidepressiva_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+#anticoagulant
+table(data.to.infer$Stollingsremmers_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+
+#Antiepileptic
+table(data.to.infer$Antiepileptica_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+
+#Antihistamines
+table(data.to.infer$Antihistaminica_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+
+#ARBs
+table(data.to.infer$arbs_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+
+#Asthma/COPD medication
+table(data.to.infer$AstmaCOPD_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+
+#Calcium medication
+table(data.to.infer$Calciumregulatie_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+
+#Corticosteroids
+table(data.to.infer$Corticosteroiden_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+
+#Diuretics
+#Dopaminergic
+#table(data.to.infer$Dopaminergica_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+
+#Gonadocorticoids
+#table(data.to.infer$Geslachtshormonen_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+
+#Immunosuppressants
+#table(data.to.infer$immunosuppressants_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+
+#Insulin
+table(data.to.infer$insulin_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+
+#Other cancer medication
+#table(data.to.infer$cancer_medication_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+
+#PPIs
+table(data.to.infer$ppi_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+
+#Statins
+table(data.to.infer$statins_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+
+#T2 diabetes medication
+table(data.to.infer$number_of_medications_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+#denzodiazepine
+table(data.to.infer$denzodiazepine_2014, data.to.infer$ILI_ja_nee, useNA = "always")
+
+```
+
+## Table of pathogens/virus  
+
+```{r}
+#No. of pathogens detected
+#table(data.to.infer.ori$numb_pathogens, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+#Influenza virus
+table(data.to.infer.ori$influenza_2014_any, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+#Influenza A virus
+table(data.to.infer.ori$influenza_A_2014, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+#Influenza B virus
+table(data.to.infer.ori$influenza_B_2014, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+
+#table(data.to.infer.ori$influenza_type_2014, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+#Rhinovirus
+table(data.to.infer.ori$rhinovirus_2014, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+#Coronavirus
+table(data.to.infer.ori$coronavirus_2014, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+#RSV
+table(data.to.infer.ori$respiratory_syncytial_virus_2014, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+#HPIV
+table(data.to.infer.ori$human_parainfluenzavirus_2014_any, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+#HMPV
+table(data.to.infer.ori$human_metapneumovirus_2014, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+#Mycoplasma pneumoniae
+table(data.to.infer.ori$mycoplasma_pneumoniae_2014, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+#Chlamydophila pneumoniae
+table(data.to.infer.ori$chlamydophila_pneumoniae_2014, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+#~Haemophilus
+table(data.to.infer.ori$haemophilus_2014_any, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+#~H. influenzae
+table(data.to.infer.ori$haemophilus_influenzae_2014, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+#~H. haemolyticus
+table(data.to.infer.ori$haemophilus_haemolyticus_2014, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+#~Haemolytic Streptococcus
+table(data.to.infer.ori$haemolytic_streptococcus_2014, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+#~Staphylococcus aureus
+table(data.to.infer.ori$staphylococcus_aureus_2014, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+#~Moraxella catarrhalis
+table(data.to.infer.ori$staphylococcus_aureus_2014, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+#~Streptococcus pneumoniae
+table(data.to.infer.ori$streptococcus_pneumoniae_2014, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+
+#adeno_2014
+#bocavirus_2014
+#bordetella_pertussis_2014
+#legionella_pneumophila_2014
+table(data.to.infer.ori$legionella_pneumophila_2014, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+table(data.to.infer.ori$bordetella_pertussis_2014, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+table(data.to.infer.ori$bocavirus_2014, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+table(data.to.infer.ori$adeno_2014, data.to.infer.ori$ILI_ja_nee, useNA = "always")
+```
+
+
+```{r}
+sessionInfo()
+```
+
+
+

@@ -1,0 +1,804 @@
+---
+title: "The nasopharyngeal microbiota of elderly subjects with and without influenza-like illness"
+subtitle: "Microbiota stability analysis"
+author: "Sudarshan A. Shetty"
+date: "`r date()`"
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 2
+    toc_float: true
+---
+
+# Microbiota stability 
+# Analysis   
+
+## Load pkgs    
+```{r libraries, warning=FALSE, message=FALSE}
+
+library(microbiome); #packageVersion("microbiome")
+library(phyloseq)#packageVersion("phyloseq")
+library(dplyr)#packageVersion("dplyr")
+library(ggpubr)#packageVersion("ggpubr")
+library(patchwork)#packageVersion("patchwork")
+library(vegan)
+library(gghalves)
+library(reshape)
+library(microbiomeutilities)
+library(MiSPU)
+library(rstatix)
+library(ggridges)
+library(tibble)
+theme_set(theme_bw())
+source("codes/generalCodes.R")
+source("codes/coreAnalysis.R")
+dir.create("05_stability")
+
+```
+
+
+Read the phyloseq object created `01_ili_deomographics.rmd`    
+
+```{r var-cols}
+
+dis_col <- c(acute_ili="#6883ba", control = "#166f65", `NA`="black",
+             acute_ili_14_days = "#6d597a", control_14_days = "#87d2c9", 
+             acute_ili_recovery = "#e56b6f") 
+
+```
+
+## Import  
+
+```{r}
+ps.main <- readRDS("data/rds/ps.clean.rds")
+
+length(unique(sample_data(ps.main)$participant_id))
+
+#any(unique(sample_data(ps.main)$participant_id %in% c("ELD156", "ELD208", "ELD39")))
+```
+
+397 participants. 
+
+Next, we compare stability of microbiota composition in non-ILI group with that of ILI group.  
+
+## Root tree  
+```{r}
+set.seed(12580)
+my.tree <- phy_tree(ps.main)
+out.group <- pick_new_outgroup(my.tree)
+out.group ## [1] "ASV2239" Genus:"Beijerinckiaceae"
+out.group <- "ASV8595"
+tax_table(ps.main)[out.group,]
+new.tree <- ape::root(my.tree, outgroup=out.group, resolve.root=TRUE)
+phy_tree(ps.main) <- new.tree
+phy_tree(ps.main)
+
+```
+
+
+
+# Microbiota stability   
+
+```{r}
+#min(sample_sums(ps.main))=1975
+set.seed(18474)
+ps.main.rar <- rarefy_even_depth(ps.main, sample.size = min(sample_sums(ps.main)))
+#408OTUs were removed because they are no longer
+```
+
+
+## GUniFrac  
+
+Use rarefied data
+
+```{r}
+# Use GUniFrac from MiSPU R pks as it is faster. 
+# GUniFrac
+gunifracs.stab <- GUniFrac(t(abundances(ps.main.rar)), 
+                      tree=ps.main.rar@phy_tree, 
+                      alpha=c(0, 0.5, 1))
+
+saveRDS(gunifracs.stab, "data/rds/gunifracs.stab.rds")
+
+guni_weighted_0.5 <- gunifracs.stab$d5
+colnames(guni_weighted_0.5) <- sample_names(ps.main.rar)
+rownames(guni_weighted_0.5) <- sample_names(ps.main.rar)
+
+```
+
+### Prep table   
+```{r}
+
+# get metadata 
+meta_tib <- get_tibble(ps.main.rar, slot="sam_data") %>% 
+   dplyr::select(participant_id, column_id, 
+                 condition_status, condition_group, 
+                 gender, age_yrs_oct2014)
+table(meta_tib$condition_group)
+```
+
+
+## Pick participants with samples  
+### Control visit 1 and 2  
+
+```{r}
+#ps.main.gen <- aggregate_taxa(ps.main, "genus")
+ps.no.ili <- subset_samples(ps.main, condition_group=="control")
+no.ili.samples <- meta(subset_samples(ps.no.ili, condition_status == "control"))$participant_id
+no.ili.v2.samples <- meta(subset_samples(ps.no.ili, condition_status == "control_14_days"))$participant_id
+# present in both
+no.ili.v1.v2 <- intersect(no.ili.samples, no.ili.v2.samples)
+
+ps.no.ili.v1v2 <-  subset_samples(ps.no.ili, participant_id %in% no.ili.v1.v2)
+ps.no.ili.v1v2 <- prune_taxa(taxa_sums(ps.no.ili.v1v2) > 0 , ps.no.ili.v1v2)
+```
+
+
+### Dist table Control visit 1 and 2  
+
+```{r}
+
+#ctrl_gunifrac <- guni_weighted_0.5[]
+
+cntrl_v1v2 <- reshape2::melt(
+  as.matrix(guni_weighted_0.5), 
+  varnames = c("S1", "S2"),
+  value.name = "GUniFrac") %>%
+  #filter(S1 != S2) %>% 
+  mutate_if(is.factor, as.character) %>% 
+  left_join(meta_tib, by = c("S1" = "column_id")) %>%
+  left_join(meta_tib, by = c("S2" = "column_id"),suffix = c("_1", "_2")) %>% 
+  filter(S1 != S2) %>% 
+  filter(participant_id_1 %in% no.ili.v1.v2) %>% 
+  filter(participant_id_2 %in% no.ili.v1.v2) %>% 
+  filter(participant_id_1 == participant_id_2) %>%
+  mutate(SubjectID = participant_id_1) %>%
+  distinct(SubjectID, .keep_all = TRUE) %>% 
+  dplyr::select(-participant_id_1, -participant_id_1) %>% 
+  mutate(stability = 1-GUniFrac, comparison = "Control v1 vs v2")
+
+```
+
+### ILI visit 1 and 2   
+
+We make a list of participants, then find those in all three visits and then make phyloseq object with ili participants with all three timepoints. the phyloseq objects are for later analysis.  
+```{r}
+# get subject who have acute ssamples
+ps.ili <- subset_samples(ps.main, condition_group=="ili")
+
+# list subject with acute samples
+acute_samples <- microbiome::meta(subset_samples(ps.ili, 
+                                                 condition_status == "acute_ili"))$participant_id
+# list subject with acute 14d samples
+ili_v2_samples <- microbiome::meta(subset_samples(ps.ili, 
+                                                  condition_status == "acute_ili_14_days"))$participant_id
+# list subject with acute recovery samples
+ili_v3_samples <- microbiome::meta(subset_samples(ps.ili, 
+                                                  condition_status == "acute_ili_recovery"))$participant_id
+# present in both
+ili_v1_v2 <- intersect(acute_samples, ili_v2_samples)
+ili_v1_v2_v3 <- intersect(ili_v1_v2, ili_v3_samples)
+# keep only those subject with illi 1,2 3 samples
+ps.ili.v1v2v3 <- subset_samples(ps.ili, participant_id %in% ili_v1_v2_v3)
+# 141075010361 is baseline from vaccine group 
+#table(meta(ps.ili.v1v2v3)$participant_id)
+
+# ili v1 v2
+ps.ili.v12 <- subset_samples(ps.ili.v1v2v3, condition_status != "acute_ili_recovery")
+ps.ili.v12 <- prune_taxa(taxa_sums(ps.ili.v12) > 0 , ps.ili.v12)
+# ili v2 v3
+ps.ili.v23 <- subset_samples(ps.ili.v1v2v3, condition_status != "acute_ili")
+ps.ili.v23 <- prune_taxa(taxa_sums(ps.ili.v23) > 0 , ps.ili.v23)
+# ili v1 v3
+ps.ili.v13 <- subset_samples(ps.ili.v1v2v3, condition_status != "acute_ili_14_days")
+ps.ili.v13 <- prune_taxa(taxa_sums(ps.ili.v13) > 0 , ps.ili.v13)
+
+```
+
+### Dist table ILI visit 1 and 2  
+```{r}
+
+ili_v1v2 <- reshape2::melt(
+  as.matrix(guni_weighted_0.5), 
+  varnames = c("S1", "S2"),
+  value.name = "GUniFrac") %>%
+  #filter(S1 != S2) %>% 
+  mutate_if(is.factor, as.character) %>% 
+  left_join(meta_tib, by = c("S1" = "column_id")) %>%
+  left_join(meta_tib, by = c("S2" = "column_id"),suffix = c("_1", "_2")) %>% 
+  filter(S1 != S2) %>% 
+  filter(S1 %in% sample_names(ps.ili.v12)) %>% 
+  filter(S2 %in% sample_names(ps.ili.v12)) %>% 
+  filter(participant_id_1 == participant_id_2) %>%
+  mutate(SubjectID = participant_id_1) %>%
+  distinct(SubjectID, .keep_all = TRUE) %>% 
+  dplyr::select(-participant_id_1, -participant_id_1) %>% 
+  mutate(stability = 1-GUniFrac, comparison = "ILI v1 vs v2")
+```
+
+### Dist table ILI visit 2 and 3  
+```{r}
+
+ili_v2v3 <- reshape2::melt(
+  as.matrix(guni_weighted_0.5), 
+  varnames = c("S1", "S2"),
+  value.name = "GUniFrac") %>%
+  #filter(S1 != S2) %>% 
+  mutate_if(is.factor, as.character) %>% 
+  left_join(meta_tib, by = c("S1" = "column_id")) %>%
+  left_join(meta_tib, by = c("S2" = "column_id"),suffix = c("_1", "_2")) %>% 
+  filter(S1 != S2) %>% 
+  filter(S1 %in% sample_names(ps.ili.v23)) %>% 
+  filter(S2 %in% sample_names(ps.ili.v23)) %>% 
+  filter(participant_id_1 == participant_id_2) %>%
+  mutate(SubjectID = participant_id_1) %>%
+  distinct(SubjectID, .keep_all = TRUE) %>% 
+  dplyr::select(-participant_id_1, -participant_id_1) %>% 
+  mutate(stability = 1-GUniFrac, comparison = "ILI v2 vs v3")
+```
+
+### Dist table ILI visit 1 and 3  
+```{r}
+
+ili_v1v3 <- reshape2::melt(
+  as.matrix(guni_weighted_0.5), 
+  varnames = c("S1", "S2"),
+  value.name = "GUniFrac") %>%
+  #filter(S1 != S2) %>% 
+  mutate_if(is.factor, as.character) %>% 
+  left_join(meta_tib, by = c("S1" = "column_id")) %>%
+  left_join(meta_tib, by = c("S2" = "column_id"),suffix = c("_1", "_2")) %>% 
+  filter(S1 != S2) %>% 
+  filter(S1 %in% sample_names(ps.ili.v13)) %>% 
+  filter(S2 %in% sample_names(ps.ili.v13)) %>% 
+  filter(participant_id_1 == participant_id_2) %>%
+  mutate(SubjectID = participant_id_1) %>%
+  distinct(SubjectID, .keep_all = TRUE) %>% 
+  dplyr::select(-participant_id_1, -participant_id_1) %>% 
+  mutate(stability = 1-GUniFrac, comparison = "ILI v1 vs v3")
+```
+
+### Merge stability tables  
+```{r}
+gunifrac_stability <- cntrl_v1v2 %>% 
+  bind_rows(ili_v1v2) %>% 
+  bind_rows(ili_v2v3) %>% 
+  bind_rows(ili_v1v3)
+
+gunifrac_stability$comparison <- factor(gunifrac_stability$comparison, 
+                                        levels = c("Control v1 vs v2", 
+                                                   "ILI v1 vs v2", 
+                                                   "ILI v2 vs v3", 
+                                                   "ILI v1 vs v3"))
+
+```
+
+
+### Plot stability  
+
+## Plot stability  
+
+```{r}
+
+# make a pairwise list that we want to compare.
+comp_pairs <- make_pairs(gunifrac_stability$comparison)
+
+comp_cols <- c(`Control v1 vs v2` = "#9e0059",
+               `ILI v1 vs v2` = "#b56576",
+               `ILI v2 vs v3` = "#eaac8b",
+               `ILI v1 vs v3` = "#7a87bf")
+
+#ggdensity(v123, "stability", facet.by = "condition_group_1")
+```
+
+
+```{r}
+
+stab.plot <- ggplot(gunifrac_stability,
+                    aes(y = stability, x = comparison, 
+                        fill = comparison)) + 
+  geom_boxplot(aes(fill = comparison), width = 0.2, 
+               outlier.shape = NA, alpha = 0.25) + 
+  geom_jitter(aes(group = comparison, color = comparison), 
+              alpha = 0.25, size = 1) + 
+  geom_half_violin(position = position_nudge(x = 0.15, y = 0), 
+                   alpha = 0.2, side = "r") + 
+  #stat_compare_means(comparisons = comp_pairs, 
+   #                  hide.ns = TRUE) + 
+  scale_fill_manual("Comparisons",values=comp_cols) +
+  scale_color_manual("Comparisons",values=comp_cols) +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank()) +
+  xlab("") + ylab("Stability (1-GUniFrac)") + 
+  theme_biome_utils() + 
+  theme(#legend.position = "top",
+    text = element_text(size=14)) 
+
+stab.plot
+ggsave("05_stability/stability_gunifrac.pdf", height = 5, width = 5)
+ggsave("05_stability/stability_gunifrac.tiff", height = 5, width = 5)
+```
+
+## Analayse stability groups  
+
+### Groups/bins  
+#### BC
+```{r}
+#http://web.mnstate.edu/peil/MDEV102/U4/S36/S363.html
+# I use sumary stats 
+gunifrac_stability_groups <- gunifrac_stability %>% 
+  mutate(stability_group = ifelse(stability >= summary(gunifrac_stability$stability)[5], "High", 
+                                  ifelse(stability <= summary(gunifrac_stability$stability)[2], "Low", "Medium")))
+
+write.table(gunifrac_stability_groups, "05_stability/ili_3_microbiota_stability.txt", sep = "\t")
+
+#Count stability subjects
+bc_stab_ov <- gunifrac_stability_groups %>% 
+  #distinct(participant_id, .keep_all = TRUE) %>% 
+  group_by(comparison,stability_group) %>% tally() %>% 
+  mutate(rel.freq = round(100 * n/sum(n), 1),
+         rel.freq.pct = paste0(round(100 * n/sum(n), 0), "%")) 
+knitr::kable(bc_stab_ov)
+
+bc_stab_ov_wd <- bc_stab_ov %>% 
+  tidyr::pivot_wider(id_cols=stability_group, names_from = comparison, values_from="rel.freq")
+bc_stab_ov_wd$Measure <- "GUniFrac"
+```
+
+
+## Intra-individual dynamics in stability   
+
+```{r}
+ps.no.ili.v1v2@phy_tree <- NULL
+ps.ili.v12@phy_tree <- NULL
+ps.ili.v23@phy_tree <- NULL
+ps.ili.v13@phy_tree <- NULL
+
+ps.merge <- merge_phyloseq(ps.no.ili.v1v2,ps.ili.v12, ps.ili.v23,ps.ili.v13)
+ps.merge <- prune_taxa(taxa_sums(ps.merge) >0, ps.merge)
+
+# re-add tree from main source as diff tips in each object.
+phy_tree(ps.merge) <- phy_tree(ps.main)
+length(unique(sample_data(ps.merge)$participant_id))
+saveRDS(ps.merge, "data/rds/ps.merge.rds")
+
+```
+
+
+```{r}
+#make data smaller with select col
+
+# order groups
+gunifrac_stability_groups$stability_group <- factor(gunifrac_stability_groups$stability_group,
+                                                    levels = c("High", "Medium","Low"))
+
+```
+
+### Intra-and inter- individual variation  
+```{r}
+
+cols_m <- c(High="#247ba0", Medium = "#0b2545", Low="#db3a34")
+stab_pairs <- make_pairs(as.character(gunifrac_stability_groups$comparison))
+
+stab.line.plot <- gunifrac_stability_groups %>% 
+  filter(comparison != "Control v1 vs v2") %>% 
+  #mutate(Group=ifelse(condition_group_1=="no_ili_v1_v2", "NO-ILI", "ILI")) %>% 
+  ggplot(aes(comparison, stability)) + 
+  geom_line(aes(group=SubjectID), color="grey", alpha=0.5) + 
+  geom_jitter(aes(color=stability_group), 
+              alpha=0.25, size=2, width = 0.05) + 
+  ylab("Stability (1-GUniFrac)") +
+  #facet_grid(~Group) + 
+  #stat_compare_means(comparisons = , paired = TRUE) +
+  scale_color_manual("Stability",values = cols_m) +
+  theme_biome_utils() + theme(legend.position = "top")
+
+ggsave("05_stability/03_Individua_combi_stability.pdf", height = 4, width = 7)
+ggsave("05_stability/03_Individua_combi_stability.tiff", height = 4, width = 7)
+
+```
+
+## Alpha diversity and stability   
+
+```{r}
+ps.main.rar <- phyloDiversity(ps.main.rar)
+dom.rar <- core_abundance(ps.main.rar, 0.00001, 0.75)
+sample_data(ps.main.rar)$core_dom <- dom.rar 
+stab.samples <- union(gunifrac_stability_groups$S1,gunifrac_stability_groups$S2)
+
+ps.main.rar.2 <- prune_samples(stab.samples, ps.main.rar)
+ps.stab.v1.v2 <- subset_samples(ps.main.rar.2, condition_status %in% c("control", "acute_ili"))
+table(meta(ps.stab.v1.v2)$condition_status)
+length(unique(meta(ps.stab.v1.v2)$participant_id))
+```
+
+```{r}
+ps.stab.meta <- meta(ps.stab.v1.v2) 
+# pick v1 v2 comparisons
+stab.cb.v1 <- gunifrac_stability_groups %>% 
+  #filter(condition_group_1 %in% c("no_ili_v1_v2","ili_v1_v2")) %>% 
+  left_join(ps.stab.meta, by=c("SubjectID"="participant_id"))
+```
+
+
+### Plot diversity vs stability   
+
+```{r fig.width=12, fig.height=4}
+p.dv <- ggplot(stab.cb.v1, aes(stability,PD)) +
+  geom_point(aes(color=comparison), alpha=0.5, size=3) +
+  facet_grid(~comparison) +
+  scale_color_manual(values=comp_cols) +
+  theme_biome_utils() +
+  stat_cor(method = "spearman", label.y = 40) +
+  geom_smooth(method = "lm") +
+  theme(legend.position = "none", strip.text = element_text(size=14)) + 
+  ylab("Phylogenetic diversity") + xlab("Stability (1-GUniFrac)") + rotate_x_text()
+p.dv
+ggsave("05_stability/stability.spearman.cor.pdf", height = 3, width = 7)
+```
+
+```{r}
+p.dv.dom <- ggplot(stab.cb.v1, aes(stability,core_dom)) +
+  geom_point(aes(color=comparison), alpha=0.5, size=2) +
+  facet_grid(~comparison) +
+  scale_color_manual(values=comp_cols) +
+  theme_minimal() +
+  stat_cor(method = "spearman", label.y = 1.5) +
+  geom_smooth(method = "lm") +
+  theme(legend.position = "none", strip.text = element_text(size=14)) + 
+  ylab("Abundance \ncore microbiota") + xlab("Stability (1-GUniFrac)") + 
+  rotate_x_text()
+p.dv.dom 
+ggsave("msfigs/core_stability.bet.alpha.spearman.cor.pdf", height = 4, width = 8)
+```
+
+#### Figure 
+```{r}
+stab.plot.f <-  stab.plot + theme_minimal(base_size = 10) + theme(legend.position="none")
+stab.line.plot.f <- stab.line.plot + theme_minimal(base_size = 10)
+p.dv.f <- p.dv + theme_minimal(base_size = 10)
+p.dv.dom <- p.dv.dom + theme_minimal(base_size = 10) + theme(legend.position="none")
+(stab.plot.f+stab.line.plot.f)/p.dv.f /p.dv.dom + plot_annotation(tag_levels = "A")
+ggsave("msfigs/stability.bet.alpha.spearman.cor.pdf", height = 8, width = 10)
+```
+
+
+```{r}
+compar.stbs <- make_pairs(stab.cb.v1$stability_group)
+head(stab.cb.v1)
+ggplot(stab.cb.v1, aes(stability_group,PD)) +
+  geom_boxplot() + 
+  facet_grid(~comparison) +
+  stat_compare_means(comparisons = compar.stbs)+
+  #stat_summary() +
+  geom_jitter(alpha=0.5, size=3, width = 0.2) +
+  theme_minimal()
+core_domdf <- meta(ps.main.rar)
+ggplot(core_domdf, aes(condition_status,core_dom)) +
+  geom_boxplot() + 
+  stat_compare_means(comparisons = compar.stbs)+
+  #stat_summary() +
+  geom_jitter(alpha=0.5, size=3, width = 0.2) +
+  theme_minimal()
+
+
+```
+
+
+
+# Variability   
+
+```{r}
+
+ps.merge <- readRDS("data/rds/ps.merge.rds")
+ps.merge.genus.rel <- microbiome::transform(tax_glom(ps.merge,"Genus"), "compositional")
+taxa_names(ps.merge.genus.rel) <- tax_table(ps.merge.genus.rel)[,"Genus"]
+table(tax_table(ps.merge.genus.rel)[,"Phylum"])
+```
+
+
+
+```{r fig.height=6, fig.width=12}
+#ps.main.gen.rel <- readRDS("ms/rds/ps.main.gen.rel.rds")
+prevalences <- seq(.05, 1, .05)
+detections <- 10^seq(log10(1e-5), log10(.10), length = 10)
+
+library(RColorBrewer)
+core_gen_p <- plot_core(ps.merge.genus.rel,  prevalences=prevalences,
+                        detections=detections, 
+                        min.prevalence = 0.75, 
+                        plot.type = "heatmap",
+                        colours = rev(brewer.pal(5, "Spectral")),
+                        horizontal = T) + 
+  theme_bw() +
+  theme(axis.text.x = element_text(face="italic")) + 
+  rotate_x_text() +
+  labs(subtitle = paste0("Core nasopharyngeal genera (n = ", nsamples(ps.merge.genus.rel), ")"))
+core_gen_p
+
+0.00001
+
+detections2 <- c(0.00001, 0.0001, 0.001, 0.01, 0.1)
+core_gen_p_vertical <- plot_core(ps.merge.genus.rel,  prevalences=prevalences,
+                        detections=detections2, 
+                        min.prevalence = 0.75, 
+                        plot.type = "heatmap",
+                        colours = rev(brewer.pal(5, "Spectral")),
+                        horizontal = F) + 
+  theme_bw() +
+  theme(axis.text.y = element_text(face="italic")) + 
+  rotate_x_text() +
+  labs(subtitle = paste0("Core nasopharyngeal genera)"))
+core_gen_p_vertical
+
+```
+
+
+```{r fig.width=6, fig.height=4}
+plot_core(ps.merge.genus.rel)
+```
+
+## Plot Core Taxa Tree  
+
+```{r}
+
+core_gen <- core_members(ps.merge.genus.rel, detection = 0.00001, prevalence = 0.75)
+
+ps_core_gen <- core(ps.merge.genus.rel, detection = 0.00001, prevalence = 0.75)
+
+```
+
+
+
+```{r}
+#taxa_names(ps.merge.genus.rel) <- tax_table(ps.merge.genus.rel)[,"Genus"]
+core_gen <- core_members(ps.merge.genus.rel, detection = 0.00001, prevalence = 0.75)
+
+ps_core_gen <- core(ps.merge.genus.rel, detection = 0.00001, prevalence = 0.75)
+
+no_ili_ps <- subset_samples(ps_core_gen, condition_status=="control")
+no_ili_ps <- prune_taxa(taxa_sums(no_ili_ps) > 0 , no_ili_ps)
+
+no_ili_14d_ps <- subset_samples(ps_core_gen, condition_status=="control_14_days")
+no_ili_14d_ps <- prune_taxa(taxa_sums(no_ili_14d_ps) > 0 , no_ili_14d_ps)
+
+acut_ili_ps <- subset_samples(ps_core_gen, condition_status=="acute_ili")
+
+#rand_ili_samples <- sample(sample_names(acut_ili_ps), 98)
+#acut_ili_ps <- prune_samples(sample_names(acut_ili_ps) %in% rand_ili_samples, acut_ili_ps)
+acut_ili_ps <- prune_taxa(taxa_sums(acut_ili_ps) > 0 , acut_ili_ps)
+
+ili_14d_ps <- subset_samples(ps_core_gen, condition_status=="acute_ili_14_days")
+ili_14d_ps <- prune_taxa(taxa_sums(ili_14d_ps) > 0 , ili_14d_ps)
+
+
+recov_ili_ps <- subset_samples(ps_core_gen, condition_status=="acute_ili_recovery")
+recov_ili_ps <- prune_taxa(taxa_sums(recov_ili_ps) > 0 , recov_ili_ps)
+
+#no_ili','no_ili_14_days','acute_ili',                                        'acute_ili_14_days','acute_ili_recovery
+
+```
+
+
+### check for taxa variability  
+#### Calculate PV  
+
+```{r}
+set.seed(1215)
+no_illi_pv <- taxa_pv_boot(no_ili_ps,bs.iter=999)  
+no_ili_pv2 <- no_illi_pv %>% 
+  dplyr::select(-starts_with("PVI")) %>% 
+  mutate(Condition = "control") %>% 
+  arrange(desc(meanPV))
+
+
+no_ili_14d_pv <- taxa_pv_boot(no_ili_14d_ps,bs.iter=999)  
+no_ili_14d_pv2 <- no_ili_14d_pv %>% 
+  dplyr::select(-starts_with("PVI")) %>% 
+  mutate(Condition = "control_14_days") %>% 
+  arrange(desc(meanPV))
+
+
+acut_ili_pv <- taxa_pv_boot(acut_ili_ps,bs.iter=999)  
+acut_ili_pv2 <- acut_ili_pv %>% 
+  dplyr::select(-starts_with("PVI")) %>% 
+  mutate(Condition = "acute_ili") %>% 
+  arrange(desc(meanPV))
+
+
+ili_14d_pv <- taxa_pv_boot(ili_14d_ps,bs.iter=999)  
+ili_14d_pv2 <- ili_14d_pv %>% 
+  dplyr::select(-starts_with("PVI")) %>% 
+  mutate(Condition = "acute_ili_14_days") %>% 
+  arrange(desc(meanPV))
+
+
+recov_ili_pv <- taxa_pv_boot(recov_ili_ps, bs.iter=999)  
+recov_ili_pv2 <- recov_ili_pv %>% 
+  dplyr::select(-starts_with("PVI")) %>% 
+  mutate(Condition = "acute_ili_recovery") %>% 
+  arrange(desc(meanPV))
+#recov_ili_pv2
+#no_illi_pv
+```
+
+#### Plot core taxa PV  
+
+```{r fig.width=14, fig.height=10}
+core_pv <- bind_rows(no_ili_pv2,
+                     no_ili_14d_pv2,
+                     acut_ili_pv2,
+                     ili_14d_pv2,
+                     recov_ili_pv2)
+
+core_pv$LowerCI <- as.numeric(core_pv$LowerCI)
+core_pv$UpperCI <- as.numeric(core_pv$UpperCI)
+
+saveRDS(core_pv, "data/rds/core_pv.rds")
+
+pv_plot <- ggplot(core_pv, aes(x = reorder(Taxa,-meanPV), y = meanPV)) +
+  #geom_point(aes(color = Condition)) +
+  geom_pointrange(aes(ymax=UpperCI, ymin=LowerCI, 
+                      color = Condition), 
+                  alpha=0.50)  + 
+  scale_color_manual(values = dis_col) + 
+  coord_flip() + 
+  theme_biome_utils() +
+  ylim(0.4,0.9) +
+  theme(axis.text.y = element_text(face="italic")) +
+  xlab("Genus") +
+  ylab("Proportional variability (mean)")
+pv_plot
+
+core_gen_p 
+
+core_gen_p + pv_plot + plot_layout(h=c(1,2)) + plot_annotation(tag_levels = "A")
+ggsave("05_stability/coreplot_taxa_pv.pdf", height = 6, width = 10)
+ggsave("05_stability/coreplot_taxa_pv.tiff", height = 6, width = 10)
+
+write.table(core_pv, "05_stability/pv_core_taxa.txt", sep="\t")
+```
+
+
+
+```{r}
+stab.plot.f <-  stab.plot + theme_minimal(base_size = 10) + theme(legend.position="none")
+stab.line.plot.f <- stab.line.plot + theme_minimal(base_size = 10)
+p.dv.f <- p.dv + theme_minimal(base_size = 10)
+
+(stab.plot.f+stab.line.plot.f)/p.dv.f + plot_annotation(tag_levels = "A")
+ggsave("msfigs/stability.bet.alpha.spearman.cor.pdf", height = 6, width = 10)
+
+```
+
+## Distirbution of PV 
+
+```{r}
+
+no_illi_pv3  <- no_illi_pv  %>% 
+  dplyr::select(starts_with("PVI")) %>% 
+  rownames_to_column("taxa") %>% 
+  reshape2::melt() %>% 
+  mutate(Condition = "control")
+
+no_ili_14d_pv3  <- no_ili_14d_pv  %>% 
+  dplyr::select(starts_with("PVI")) %>% 
+  rownames_to_column("taxa") %>% 
+  reshape2::melt() %>% 
+  mutate(Condition = "control_14_days")
+
+acut_ili_pv3 <- ili_14d_pv  %>% 
+  dplyr::select(starts_with("PVI")) %>% 
+  rownames_to_column("taxa") %>% 
+  reshape2::melt() %>% 
+  mutate(Condition = "acute_ili")
+
+ili_14d_pv3 <- ili_14d_pv  %>% 
+  dplyr::select(starts_with("PVI")) %>% 
+  rownames_to_column("taxa") %>% 
+  reshape2::melt() %>% 
+  mutate(Condition = "acute_ili_14_days")
+
+
+recov_ili_pv3 <- recov_ili_pv  %>% 
+  dplyr::select(starts_with("PVI")) %>% 
+  rownames_to_column("taxa") %>% 
+  reshape2::melt() %>% 
+  mutate(Condition = "acute_ili_recovery")
+
+core_pv3 <- bind_rows(no_illi_pv3,
+                      no_ili_14d_pv3,
+                      acut_ili_pv3,
+                      ili_14d_pv3,
+                      recov_ili_pv3)
+
+#head(recov_ili_pv3)
+
+ridge_pv <- ggplot(core_pv3, aes(x = value, y = Condition)) + 
+  geom_density_ridges(aes(fill=Condition), alpha=0.75, color=NA)+
+  scale_fill_manual(values = dis_col) +
+  theme_minimal() +
+  facet_wrap(~taxa, ncol=3) +
+  theme(axis.text.y = element_blank(),
+        axis.title.y= element_blank(),
+        strip.text = element_text(face="italic"))+
+  xlab("Proportional variability")
+
+
+```
+
+```{r}
+
+core_gen_p_vertical <- core_gen_p_vertical + theme_minimal(base_size = 10)
+
+core_gen_p_vertical + ridge_pv + plot_annotation(tag_levels = "A") +
+  plot_layout(guides = "collect", widths = c(1,2))
+
+ggsave("msfigs/Figure core pv_density.pdf", height = 5, width = 10)
+```
+
+
+## Extract ASVs within core genera  
+
+```{r}
+library(dplyr)
+library(tibble)
+library(tidyr)
+library(ggtree)
+
+ps.merge.clr <- microbiome::transform(ps.merge,"clr")
+ps.core.asv <- subset_taxa(ps.merge.clr, Genus %in% core_gen)
+ps.core.asv <- subset_samples(ps.core.asv, condition_status %in% c("control", "acute_ili"))
+ps.core.asv <- removeZeroTaxa(ps.core.asv)
+
+colnames(sample_data(ps.core.asv))[2] <- "samid"
+taxa_fd <- calculateTaxaFoldDifference(ps.core.asv, group="condition_status") 
+
+treedata<-taxa_fd %>%
+  filter(abs(FoldDifference) > 0.3 & abs(FoldDifference) !=Inf) 
+
+tree <- ps.core.asv@phy_tree
+tree <- drop.tip(tree, tree$tip.label[!tree$tip.label %in% treedata$FeatureID])
+
+#ggtree(tree, layout="circular",
+#       aes(color=Phylum)) %<+%
+#  treedata
+library(RColorBrewer)
+testcol <-  colorRampPalette( brewer.pal(12, "Paired"))
+tax_cols <- c("#e6194b","brown3","#7789c9","#3cb44b","#f58231","#911eb4","#0dbfbf","#b097ad","#bcf60c","#fabebe","#008080","#e6beff","#9a6324","#e4cd05","#800000","#88cf9e","#808000")
+#,                     size=Prevalence.acute_ili
+
+
+## Select those with high low
+treedata2 <- treedata %>% 
+  filter(abs(FoldDifference) > 0.3 | abs(FoldDifference) > 0.3)
+  
+d1 <- data.frame(x = seq(1.8, 3.5, length.out = 9))
+p <- ggtree(tree, layout="circular") %<+%
+  treedata +
+  #geom_tree(aes(color=Genus), size=2) +
+  geom_point2(aes(color=Genus), size=3, shape=21) +
+  #geom_tippoint(aes(fill=Enriched), 
+  #             shape=21, 
+  #alpha=0.5,
+  #            size=2) +
+  #geom_tiplab(aes(label=Significant)) 
+  geom_tiplab(aes(color=Enriched),offset = .30, align=TRUE, linesize=0.5, size=3) +
+  scale_color_manual(values = tax_cols) +
+  #scale_fill_manual(values = dis_col) +
+  geom_tippoint(aes(fill=FoldDifference), x = d1$x[1], shape = 21,
+                na.rm=TRUE,color="#999999", size=3) +
+  scale_fill_gradient2() +
+  theme(legend.text = element_text(face="italic"))
+p
+
+ggsave("msfigs/Figure coretee ctrl iliv1.pdf", height = 6, width = 9)
+
+```
+
+
+```{r}
+sessionInfo()
+```
+
+

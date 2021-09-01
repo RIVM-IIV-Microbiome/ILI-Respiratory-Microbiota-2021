@@ -1,0 +1,1059 @@
+---
+title: "The nasopharyngeal microbiota of elderly subjects with and without influenza-like illness"
+subtitle: "Taxa association"
+author: "Sudarshan A. Shetty"
+date: "`r date()`"
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 2
+    toc_float: true
+---
+
+# Association analysis  
+
+## Libraries
+
+```{r message=FALSE, warning=FALSE}
+library(microbiome)
+library(microbiomeutilities)
+library(phyloseq)
+library(coin)
+library(dplyr)
+library(readr)
+
+dis_col <- c(acute_ili="#6883ba", control = "#166f65", `NA`="black",
+             acute_ili_14_days = "#6d597a", control_14_days = "#87d2c9", 
+             acute_ili_recovery = "#e56b6f") 
+```
+
+## Import functions  
+```{r}
+#source("codes/functions.associations.R")
+#source("codes/transform_to_fractions.R")
+source("codes/biomestats.R") # all function for this specific analysis are stored here.
+source("codes/generalCodes.R")
+
+```
+
+```{r}
+dir.create("06_taxa_associations")
+```
+
+
+## Import data  
+```{r eval=TRUE}
+
+ps.main.2 <- readRDS("data/rds/ps.main.2.rds")
+
+colnames(tax_table(ps.main.2))[7] <- "Species"
+ps.main.2.genus <- tax_glom(ps.main.2,"Genus", NArm = FALSE)
+saveRDS(ps.main.2.genus, "data/rds/ps.main.2.genus.rds")
+
+#DT::datatable(tax_table(ps.main.2.genus))
+#ps.main.2 <- format_to_besthit(ps.main.2)
+#taxa_names(ps.main.2)[3:15]
+#ps.main.genus.2 <- readRDS("data/rds/ps.main.genus.2.rds")
+```
+
+```{r}
+ps.main.2.genus <- readRDS("data/rds/ps.main.2.genus.rds")
+#ps.main.2.genus <- readRDS("data/rds/ps.main.2.genus.rds")
+#table(tax_table(ps.main.2.genus)[,"Genus"], useNA="always")
+
+ps.main.2.genus <- format_to_besthit(ps.main.2.genus)
+
+taxa_names(ps.main.2.genus)[3:15]
+
+taxa_names(ps.main.2.genus) <- gsub(" ", ".", taxa_names(ps.main.2.genus))
+taxa_names(ps.main.2.genus) <- gsub("\\[|\\]", "", taxa_names(ps.main.2.genus))
+taxa_names(ps.main.2.genus) <- gsub("-", ".", taxa_names(ps.main.2.genus))
+```
+
+
+### Variables of interest:  
+Antibiotics in 2014, Antimicrobials in 2014, Co-morbidities 2014 
+
+```{r} 
+main_var <- "ILI"
+
+comord.vars <- c("BMI_2014","respiratory_disease_2014", "comorbidities_2014",
+                 "chronic_cvd_2014","Diabetes_2014", "autoimmune_disease_2014", 
+                 "other_malignancies", "Roken_2014")
+
+med.vars <- c("ace_inhibitors_2014", "statins_2014",
+              "alpa_beta_blockers_2014","antimicrobials_2014", "arbs_2014", "insulin_2014", "ppi_2014", 
+              "Corticosteroiden_2014", "Antiepileptica_2014", "Antihistaminica_2014",
+              "analgesics_2014", "flu_shot_2014_2015", "denzodiazepine_2014",
+              "Antidepressiva_2014", "Calciumregulatie_2014",
+              "AstmaCOPD_2014", "number_of_medications_2014", "antibioitics_2014")
+# removed "Dopaminergica_2014" due to very low numbers
+# This will be used only when comparing ILI participants
+#patho.vars <- c("influenza_2014_any","haemophilus_2014_any","coronavirus_2014",
+#                "respiratory_syncytial_virus_2014","staphylococcus_aureus_2014",
+#                "haemolytic_streptococcus_2014","human_metapneumovirus_2014",
+#                "human_parainfluenzavirus_2014_any","rhinovirus_2014")
+
+#all.vars <- c(comord.vars,med.vars,patho.vars)
+all.vars <- c(comord.vars,med.vars)
+
+```
+
+```{r}
+#all.vars
+#sample_data(ps.main.genus.2) <- sample_data(ps.main.genus.2)[,all.vars]
+
+table(sample_data(ps.main.2.genus)$ppi_2014, useNA = "always")
+
+```
+
+1= participant is smoker
+2= participant is passive smoker
+3= participant doesn't smoke
+```{r}
+
+
+table(sample_data(ps.main.2.genus)$Roken_2014, useNA = "always")
+# Roken i.e. smoking has three levels. 1=smoking, 2=passive smoking and 3-not smoking
+
+# Recode smoking variables: so 0 is no and increasing to yes 2
+sample_data(ps.main.2.genus)$Roken_2014 <- 3-as.numeric(sample_data(ps.main.2.genus)$Roken_2014)
+
+table(sample_data(ps.main.2.genus)$flu_shot_2014_2015, useNA = "always")
+sample_data(ps.main.2.genus)[,"flu_shot_2014_2015"][sample_data(ps.main.2.genus)[,"flu_shot_2014_2015"] == 3] <- 2
+
+table(sample_data(ps.main.2.genus)$antibioitics_2014, useNA = "always") 
+```
+
+
+# Control-ILI    
+
+## Prep abundance data  
+```{r}
+dir.create("06_taxa_associations/ctrl_ili")
+
+ctrl_ili_v1 <- c("control", "acute_ili")
+
+ps.ctrl.iliv1 <- subset_samples(ps.main.2.genus, 
+                                condition_status %in% ctrl_ili_v1)
+
+# clean taxonomy
+ps.ctrl.iliv1 <- prune_taxa(taxa_sums(ps.ctrl.iliv1) > 0, ps.ctrl.iliv1)
+```
+
+
+## Create taxa abundance table 
+```{r}
+
+asv.ctrl.iliv1 <- transform_to_fractions(ps.ctrl.iliv1, 
+                                         det.thres = 0.001,
+                                         prev.thres = 10/100)
+dim(asv.ctrl.iliv1)
+#colnames(asv.ctrl.iliv1)
+#asv.tab.ctrl.ili[1:5,1:5]
+```
+
+
+## Prep metadata  
+
+```{r}
+
+pheno.data.v1 <- prep_metadata(ps.ctrl.iliv1, 
+                               sam.ids = "Sample_Name", 
+                               ref.group="control", 
+                               compare= "condition_status", 
+                               confounder.vars = c("gender", "age_yrs_oct2014"),
+                               var.interest=all.vars)
+
+#head(pheno.data.v1)
+```
+
+
+## Strata frequency  
+```{r eval=TRUE}
+frequency.of.strata <- table(pheno.data.v1$stratum); mean(frequency.of.strata); frequency.of.strata
+```
+
+## Data for testing
+```{r}
+# remove firt column from asv_dat it is subject id
+asv.ctrl.iliv1.dat <- dplyr::select(asv.ctrl.iliv1, -ID) 
+# Create "data.set":
+data.set.v1 <- cbind(pheno.data.v1,asv.ctrl.iliv1.dat)
+row.names(data.set.v1) <- NULL
+# get only bacterial names
+ncols.pheno.v1 <- ncol(pheno.data.v1) +1
+
+nocl.v1 <- ncol(data.set.v1)-5
+bacterial.abund.v1 <- names(data.set.v1)[ ncols.pheno.v1:nocl.v1]
+
+other <- c("average","SD","prop.positive","entropy","CV")
+
+#vars.test <- colnames(phenotypic.data.1)[c(2,5:39)]
+vars.test.v1 <- c("ILI",all.vars)
+
+data.for.testing.v1 <- subset(data.set.v1,
+                              select=c(vars.test.v1,bacterial.abund.v1,other,"stratum"))
+#head(data.for.testing)
+#saveRDS(data.for.testing, "ms/taxa_test/ctrl_ili/data.for.testing.ctrl.ili.rds")
+```
+
+## Type of vars 
+```{r eval=TRUE}
+
+TYPES.v1 <- c("ordinal","continuous",rep("ordinal",nocl.v1),
+           rep("continuous",5),
+           "categorical")
+
+types.v1 <- c("categorical","continuous", 
+           rep("categorical",length(vars.test.v1)-2),
+           rep("dirac.and.continuous",length(bacterial.abund.v1)),
+           rep("continuous",5),
+           "categorical")
+#colnames(data.for.testing)[1:10]
+
+```
+
+
+## Test associations   
+```{r}
+
+no.of.factors <- length(vars.test.v1)
+aux.columns <- (length(vars.test.v1)+1):(length(colnames(data.for.testing.v1))-6)
+variables.of.interest <- names(data.for.testing.v1)
+#nominal.bound.on.FDR <- 0.20
+log.scale <- TRUE
+
+```
+
+
+```{r eval=TRUE}
+#dir.create("../../test_stat")
+set.seed(1210125)
+check_association(data.for.testing.v1,
+                  B = 100000,
+                  no.of.factors= no.of.factors,
+                  aux.columns = aux.columns,
+                  log.scale = TRUE,
+                  nominal.bound.on.FDR = 0.20,
+                  phen.data = pheno.data.v1,
+                  compare.label="ctrl_ili",
+                  aux.TYPES=TYPES.v1,
+                  cat.types = types.v1,
+                  path_loc="06_taxa_associations/ctrl_ili/",
+                  name.of.stratification= "Sex and age-group")
+```
+
+
+## Visualize assocaitions  
+```{r eval=TRUE, message=FALSE}
+
+path.files <- "06_taxa_associations/ctrl_ili/"
+pattern.name <- "SELECTED.associations.between.ctrl_ili."
+test.ctrl.ili <- combine_tables(path.files,pattern.name)
+
+```
+
+```{r}
+test.ctrl.ili$variable <- gsub("_2014","", test.ctrl.ili$variable)
+
+p <- plot_taxa_associations(tab=test.ctrl.ili, 
+                       ps=ps.ctrl.iliv1, 
+                       adj.pval=TRUE, 
+                       group="condition_status",
+                       cut.off = 0.05,
+                       p.widths = c(1,0.5)) 
+p <- p + theme(text = element_text(size=10))
+
+ggsave("06_taxa_associations/ctrl_ili/ctrl_ili_taxa_associations.pdf", h=6,w=8)
+```
+
+
+```{r eval=T, message=FALSE}
+
+save_xlsx_workbook(path.files="06_taxa_associations/ctrl_ili/",
+                   pattern.name="SELECTED.associations.between.ctrl_ili.")
+
+```
+
+### Plot significant taxa  
+```{r message=FALSE, warning=FALSE,eval=TRUE}
+path.files <- "06_taxa_associations/ctrl_ili/"
+pattern.name <- "SELECTED.associations.between.ctrl_ili."
+all_test <- combine_tables(path.files,pattern.name)
+test_ili <- subset(all_test, variable == "ILI" & better.bound.FDR <= 0.05)
+
+p.ili <- plot_listed_taxa(ps.ctrl.iliv1, select.taxa = test_ili$taxa,
+                          group.order = c("control","acute_ili"),
+                          group = "condition_status",
+                          group.colors = dis_col) + 
+  ylab("Relative abundance (log10)") + 
+  scale_y_log10() +
+  theme(strip.text = element_text(face = "italic"),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank())
+  
+p.ili
+
+ggsave("06_taxa_associations/ctrl_ili/ctrl_ili_taxa.pdf", h=3,w=6)
+```
+
+```{r}
+ctrl.test.ctrl.ili <- test.ctrl.ili
+ctrl.test.ctrl.ili$Association <- ifelse(ctrl.test.ctrl.ili$sign == -1, "Negative", "Positive")
+ctrl.test.ctrl.ili <- ctrl.test.ctrl.ili %>% 
+    filter(p.value <= 0.05)
+
+DT::datatable(ctrl.test.ctrl.ili)
+```
+
+
+
+```{r}
+p / p.ili
+```
+
+
+# Control vs ILI v2 
+ acute_ili  acute_ili_14_days acute_ili_recovery            control 
+               150                188                180                160 
+```{r}
+#dir.create("06_taxa_associations/ctrl_ili")
+
+ctrl_ili_v2 <- c("control", "acute_ili_14_days")
+
+ps.ctrl.iliv2 <- subset_samples(ps.main.2.genus, 
+                                condition_status %in% ctrl_ili_v2)
+
+# clean taxonomy
+ps.ctrl.iliv2 <- prune_taxa(taxa_sums(ps.ctrl.iliv2) > 0, ps.ctrl.iliv2)
+
+
+```
+
+## Create taxa abundance table 
+```{r}
+
+#length(core_members(transform(ps.genus.ctrl.ili, "compositional"), 0.001, 5/100))
+
+
+asv.ctrl.iliv2 <- transform_to_fractions(ps.ctrl.iliv2, 
+                                           det.thres = 0.001,
+                                           prev.thres = 10/100)
+dim(asv.ctrl.iliv2)
+#asv.tab.ctrl.ili[1:5,1:5]
+## Prep metadata  
+
+pheno.1v2 <- prep_metadata(ps.ctrl.iliv2, 
+                                     sam.ids = "Sample_Name", 
+                                     ref.group="control", 
+                                     compare= "condition_status", 
+                                     confounder.vars = c("gender", "age_yrs_oct2014"),
+                                     var.interest=all.vars)
+
+#head(pheno.1v2)
+
+
+## Data for testing
+
+# remove firt column from asv_dat it is subject id
+asv.ctrl.iliv2.dat <- dplyr::select(asv.ctrl.iliv2, -ID) 
+# Create "data.set":
+data.set.1.v2 <- cbind(pheno.1v2,asv.ctrl.iliv2.dat)
+row.names(data.set.1.v2) <- NULL
+# get only bacterial names
+ncols.pheno.v2 <- ncol(pheno.1v2) +1
+nocl.v2 <- ncol(data.set.1.v2)-5
+bacterial.abund.v2 <- names(data.set.1.v2)[ ncols.pheno.v2:nocl.v2]
+
+other <- c("average","SD","prop.positive","entropy","CV")
+
+#vars.test <- colnames(phenotypic.data.1)[c(2,5:39)]
+vars.test.v2 <- c("ILI")
+
+data.for.testing.v2 <- subset(data.set.1.v2,
+                           select=c(vars.test.v2,bacterial.abund.v2,other,"stratum"))
+#head(data.for.testing)
+#saveRDS(data.for.testing, "ms/taxa_test/ctrl_ili/data.for.testing.ctrl.ili.rds")
+```
+
+## Type of vars 
+```{r eval=TRUE}
+
+TYPES.v2 <- c("ordinal",rep("ordinal",nocl.v2),
+           rep("continuous",5),
+           "categorical")
+
+types.v2 <- c("categorical", 
+           rep("dirac.and.continuous",length(bacterial.abund.v2)),
+           rep("continuous",5),
+           "categorical")
+#colnames(data.for.testing)[1:10]
+
+```
+
+
+## Test associations   
+```{r}
+no.of.factors <- length(vars.test.v2)
+aux.columns <- (length(vars.test.v2)+1):(length(colnames(data.for.testing.v2))-6)
+variables.of.interest <- names(data.for.testing.v2)
+#nominal.bound.on.FDR <- 0.20
+log.scale <- TRUE
+
+```
+
+
+```{r eval=TRUE}
+dir.create("06_taxa_associations/ctrl_iliv2/")
+set.seed(12136125)
+check_association(data.for.testing.v2,
+                  B = 100000,
+                  no.of.factors= no.of.factors,
+                  aux.columns = aux.columns,
+                  log.scale = TRUE,
+                  nominal.bound.on.FDR = 0.20,
+                  phen.data = pheno.1v2,
+                  compare.label="ctrl_iliv2",
+                  aux.TYPES=TYPES.v2,
+                  cat.types = types.v2,
+                  path_loc="06_taxa_associations/ctrl_iliv2/",
+                  name.of.stratification= "Sex and age-group")
+```
+
+
+```{r}
+path.files <- "06_taxa_associations/ctrl_iliv3/"
+pattern.name <- "SELECTED.associations.between."
+ctrl_iliv2.iliv1 <- combine_tables(path.files,pattern.name)
+ctrl_iliv2.iliv1$Association <- ifelse(ctrl_iliv2.iliv1$sign == -1, "Negative", "Positive")
+ctrl_iliv2.iliv1 <- ctrl_iliv2.iliv1 %>% 
+    filter(p.value <= 0.05)
+
+DT::datatable(ctrl_iliv2.iliv1)
+```
+
+## Control vs ILI v3  
+
+ 
+```{r}
+#dir.create("06_taxa_associations/ctrl_ili")
+
+ctrl_ili_v3 <- c("control", "acute_ili_recovery")
+
+ps.ctrl.iliv3 <- subset_samples(ps.main.2.genus, 
+                                condition_status %in% ctrl_ili_v3)
+
+# clean taxonomy
+ps.ctrl.iliv3 <- prune_taxa(taxa_sums(ps.ctrl.iliv3) > 0, ps.ctrl.iliv3)
+
+
+```
+
+## Create taxa abundance table 
+```{r}
+
+#length(core_members(transform(ps.genus.ctrl.ili, "compositional"), 0.001, 5/100))
+
+
+asv.ctrl.iliv3 <- transform_to_fractions(ps.ctrl.iliv3, 
+                                           det.thres = 0.001,
+                                           prev.thres = 10/100)
+dim(asv.ctrl.iliv3)
+#asv.tab.ctrl.ili[1:5,1:5]
+## Prep metadata  
+
+pheno.1v3 <- prep_metadata(ps.ctrl.iliv3, 
+                           sam.ids = "Sample_Name", 
+                           ref.group="control", 
+                           compare= "condition_status", 
+                           confounder.vars = c("gender", "age_yrs_oct2014"),
+                           var.interest=all.vars)
+
+#head(pheno.1v3)
+
+
+## Data for testing
+
+# remove firt column from asv_dat it is subject id
+asv.ctrl.iliv3.dat <- dplyr::select(asv.ctrl.iliv3, -ID) 
+# Create "data.set":
+data.set.1.v3 <- cbind(pheno.1v3,asv.ctrl.iliv3.dat)
+row.names(data.set.1.v3) <- NULL
+# get only bacterial names
+ncols.pheno.v3 <- ncol(pheno.1v3) +1
+nocl.v3 <- ncol(data.set.1.v3)-5
+bacterial.abund.v3 <- names(data.set.1.v3)[ ncols.pheno.v3:nocl.v3]
+
+other <- c("average","SD","prop.positive","entropy","CV")
+
+#vars.test <- colnames(phenotypic.data.1)[c(2,5:39)]
+vars.test.v3 <- c("ILI")
+
+data.for.testing.v3 <- subset(data.set.1.v3,
+                           select=c(vars.test.v3,bacterial.abund.v3,other,"stratum"))
+#head(data.for.testing)
+#saveRDS(data.for.testing, "ms/taxa_test/ctrl_ili/data.for.testing.ctrl.ili.rds")
+```
+
+## Type of vars 
+```{r eval=TRUE}
+
+TYPES.v3 <- c("ordinal",rep("ordinal",nocl.v3),
+           rep("continuous",5),
+           "categorical")
+
+types.v3 <- c("categorical", 
+           rep("dirac.and.continuous",length(bacterial.abund.v3)),
+           rep("continuous",5),
+           "categorical")
+#colnames(data.for.testing)[1:10]
+
+```
+
+
+## Test associations   
+```{r}
+no.of.factors <- length(vars.test.v3)
+aux.columns <- (length(vars.test.v3)+1):(length(colnames(data.for.testing.v3))-6)
+variables.of.interest <- names(data.for.testing.v3)
+#nominal.bound.on.FDR <- 0.20
+log.scale <- TRUE
+
+```
+
+
+```{r eval=TRUE}
+dir.create("06_taxa_associations/ctrl_iliv3/")
+set.seed(12136125)
+check_association(data.for.testing.v3,
+                  B = 100000,
+                  no.of.factors= no.of.factors,
+                  aux.columns = aux.columns,
+                  log.scale = TRUE,
+                  nominal.bound.on.FDR = 0.20,
+                  phen.data = pheno.1v3,
+                  compare.label="ctrl_iliv3",
+                  aux.TYPES=TYPES.v3,
+                  cat.types = types.v3,
+                  path_loc="06_taxa_associations/ctrl_iliv3/",
+                  name.of.stratification= "Sex and age-group")
+```
+
+
+```{r}
+path.files <- "06_taxa_associations/ctrl_iliv3/"
+pattern.name <- "SELECTED.associations.between."
+ctrl_iliv3.iliv1 <- combine_tables(path.files,pattern.name)
+ctrl_iliv3.iliv1$Association <- ifelse(ctrl_iliv3.iliv1$sign == -1, "Negative", "Positive")
+ctrl_iliv3.iliv1 <- ctrl_iliv3.iliv1 %>% 
+    filter(p.value <= 0.05)
+
+DT::datatable(ctrl_iliv3.iliv1)
+```
+
+# Check for ILI associations with pathogens
+
+```{r}
+
+
+patho.vars <- c("influenza_2014_any","haemophilus_2014_any","coronavirus_2014",
+                "respiratory_syncytial_virus_2014","staphylococcus_aureus_2014",
+                "haemolytic_streptococcus_2014","human_metapneumovirus_2014",
+                "human_parainfluenzavirus_2014_any","rhinovirus_2014")
+all.vars <- c(comord.vars,med.vars,patho.vars)
+```
+
+## ILI V1 vs pathogens and other data  
+```{r}
+
+ps.iliv1 <- subset_samples(ps.main.2.genus, 
+                         condition_status == "acute_ili")
+
+# clean taxonomy
+ps.iliv1 <- prune_taxa(taxa_sums(ps.iliv1) > 0, ps.iliv1)
+
+```
+
+
+## Create taxa abundance table 
+```{r}
+
+asv.iliv1 <- transform_to_fractions(ps.iliv1, 
+                                    det.thres = 0.001,
+                                    prev.thres = 10/100)
+dim(asv.iliv1)
+#asv.tab.ctrl.ili[1:5,1:5]
+```
+
+
+## Prep metadata  
+
+```{r}
+
+pheno.data.ili.v1 <- prep_metadata(ps.iliv1, 
+                                   sam.ids = "Sample_Name", 
+                                   ref.group="acute_ili", 
+                                   compare= "condition_status", 
+                                   confounder.vars = c("gender", "age_yrs_oct2014"),
+                                   var.interest=all.vars)
+
+#head(pheno.data.ili.v1)
+
+pheno.data.ili.v1$human_metapneumovirus_2014[pheno.data.ili.v1$human_metapneumovirus_2014==3] <- 2
+pheno.data.ili.v1$respiratory_syncytial_virus_2014[pheno.data.ili.v1$respiratory_syncytial_virus_2014==3] <- 2
+
+pheno.data.ili.v1$human_parainfluenzavirus_2014_any[pheno.data.ili.v1$human_parainfluenzavirus_2014_any==3] <- 2
+
+pheno.data.ili.v1$rhinovirus_2014[pheno.data.ili.v1$rhinovirus_2014==3] <- 2
+```
+
+
+## Strata frequency  
+```{r eval=TRUE}
+frequency.of.strata <- table(pheno.data.ili.v1$stratum); mean(frequency.of.strata); frequency.of.strata
+```
+
+## Data for testing
+```{r}
+# remove firt column from asv_dat it is subject id
+asv.iliv1.dat <- dplyr::select(asv.iliv1, -ID) 
+# Create "data.set":
+data.set.ili.v1 <- cbind(pheno.data.ili.v1,asv.iliv1.dat)
+
+row.names(data.set.ili.v1) <- NULL
+# get only bacterial names
+
+#ncols.pheno.v1 <- ncol(pheno.data.v1) +1
+#nocl.v1 <- ncol(data.set.v1)-5
+
+ncols.pheno.ili.v1 <- ncol(pheno.data.ili.v1) +1
+
+nocl.ili.v1 <- ncol(data.set.ili.v1)-5
+bacterial.abund.ili.v1 <- names(data.set.ili.v1)[ ncols.pheno.ili.v1:nocl.ili.v1]
+
+other <- c("average","SD","prop.positive","entropy","CV")
+
+#vars.test <- colnames(phenotypic.data.1)[c(2,5:39)]
+vars.test.ili.v1 <- c(all.vars)
+
+data.for.testing.ili.v1 <- subset(data.set.ili.v1,
+                              select=c(vars.test.ili.v1,
+                                       bacterial.abund.ili.v1,
+                                       other,"stratum"))
+#head(data.for.testing)
+#saveRDS(data.for.testing, "ms/taxa_test/ctrl_ili/data.for.testing.ctrl.ili.rds")
+```
+
+## Type of vars 
+```{r eval=TRUE}
+
+TYPES.ili.v1 <- c("continuous",rep("ordinal",nocl.ili.v1),
+           rep("continuous",5),
+           "categorical")
+
+types.ili.v1 <- c("continuous", 
+           rep("categorical",length(vars.test.ili.v1)-2),
+           rep("dirac.and.continuous",length(bacterial.abund.ili.v1)),
+           rep("continuous",5),
+           "categorical")
+#colnames(data.for.testing)[1:10]
+
+```
+
+
+## Test associations   
+```{r}
+
+no.of.factors <- length(vars.test.ili.v1)
+aux.columns <- (length(vars.test.ili.v1)+1):(length(colnames(data.for.testing.ili.v1))-6)
+variables.of.interest <- names(data.for.testing.ili.v1)
+#nominal.bound.on.FDR <- 0.20
+log.scale <- TRUE
+
+```
+
+
+```{r eval=TRUE}
+#dir.create("../../test_stat")
+dir.create("06_taxa_associations/iliv1/")
+set.seed(1210125)
+check_association(data.for.testing.ili.v1,
+                  B = 100000,
+                  no.of.factors= no.of.factors,
+                  aux.columns = aux.columns,
+                  log.scale = TRUE,
+                  nominal.bound.on.FDR = 0.20,
+                  phen.data = pheno.data.ili.v1,
+                  compare.label="ili_v1",
+                  aux.TYPES=TYPES.ili.v1,
+                  cat.types = types.ili.v1,
+                  path_loc="06_taxa_associations/iliv1/",
+                  name.of.stratification= "Sex and age-group")
+```
+
+
+```{r}
+path.files <- "06_taxa_associations/iliv1/"
+pattern.name <- "SELECTED.associations.between."
+test.iliv1 <- combine_tables(path.files,pattern.name)
+test.iliv1$Association <- ifelse(test.iliv1$sign == -1, "Negative", "Positive")
+test.iliv1 <- test.iliv1 %>% 
+    filter(p.value <= 0.05)
+
+DT::datatable(test.iliv1)
+```
+
+# Check ILI V2 vs Pathogens  
+
+```{r}
+
+ps.iliv2 <- subset_samples(ps.main.2.genus, 
+                         condition_status == "acute_ili_14_days")
+
+# clean taxonomy
+ps.iliv2 <- prune_taxa(taxa_sums(ps.iliv2) > 0, ps.iliv2)
+
+```
+
+
+## Chnage metadata
+
+Add infection information from ili v1 to ili v2 microbiota 
+```{r}
+
+ili.v1.meta <- get_tibble(ps.iliv1, slot="sam_data")
+
+ps.iliv2.sub <- subset_samples(ps.iliv2, participant_id %in% ili.v1.meta$participant_id)
+
+ili.v1.meta <- ili.v1.meta %>% 
+  filter(participant_id %in% sample_data(ps.iliv2.sub)$participant_id) %>% 
+  as.data.frame() %>% 
+  column_to_rownames("participant_id")
+
+sample_names(ps.iliv2.sub) <- rownames(ili.v1.meta)
+sample_data(ps.iliv2.sub) <- sample_data(ili.v1.meta)
+
+table(sample_data(ps.iliv2.sub)$condition_status, sample_data(ps.iliv2.sub)$influenza_2014_any)
+table(sample_data(ps.iliv2)$condition_status, sample_data(ps.iliv2)$haemophilus_2014_any)
+
+ps.iliv2 <- ps.iliv2.sub
+```
+
+
+## Create taxa abundance table 
+```{r}
+
+asv.iliv2 <- transform_to_fractions(ps.iliv2, 
+                                    det.thres = 0.001,
+                                    prev.thres = 10/100)
+dim(asv.iliv2)
+#asv.tab.ctrl.ili[1:5,1:5]
+```
+
+
+## Prep metadata  
+
+```{r}
+#human_metapneumovirus_2014
+#respiratory_syncytial_virus_2014
+#human_parainfluenzavirus_2014_any 
+#rhinovirus_2014
+
+
+pheno.data.ili.v2 <- prep_metadata(ps.iliv2, 
+                                   sam.ids = "Sample_Name", 
+                                   ref.group="acute_ili", 
+                                   compare= "condition_status", 
+                                   confounder.vars = c("gender", "age_yrs_oct2014"),
+                                   var.interest=all.vars)
+
+head(pheno.data.ili.v2)
+
+
+pheno.data.ili.v2$human_metapneumovirus_2014[pheno.data.ili.v2$human_metapneumovirus_2014==3] <- 2
+
+pheno.data.ili.v2$human_metapneumovirus_2014[pheno.data.ili.v2$human_metapneumovirus_2014==3] <- 2
+pheno.data.ili.v2$respiratory_syncytial_virus_2014[pheno.data.ili.v2$respiratory_syncytial_virus_2014==3] <- 2
+
+pheno.data.ili.v2$human_parainfluenzavirus_2014_any[pheno.data.ili.v2$human_parainfluenzavirus_2014_any==3] <- 2
+
+pheno.data.ili.v2$rhinovirus_2014[pheno.data.ili.v2$rhinovirus_2014==3] <- 2
+
+#summary(pheno.data.ili.v2)
+```
+
+
+## Strata frequency  
+```{r eval=TRUE}
+frequency.of.strata <- table(pheno.data.ili.v2$stratum); mean(frequency.of.strata); frequency.of.strata
+```
+
+## Data for testing
+```{r}
+# remove firt column from asv_dat it is subject id
+asv.iliv2.dat <- dplyr::select(asv.iliv2, -ID) 
+# Create "data.set":
+data.set.ili.v2 <- cbind(pheno.data.ili.v2,asv.iliv2.dat)
+
+row.names(data.set.ili.v2) <- NULL
+# get only bacterial names
+
+#ncols.pheno.v2 <- ncol(pheno.data.v2) +1
+#nocl.v2 <- ncol(data.set.v2)-5
+
+ncols.pheno.ili.v2 <- ncol(pheno.data.ili.v2) +1
+
+nocl.ili.v2 <- ncol(data.set.ili.v2)-5
+bacterial.abund.ili.v2 <- names(data.set.ili.v2)[ ncols.pheno.ili.v2:nocl.ili.v2]
+
+other <- c("average","SD","prop.positive","entropy","CV")
+
+#vars.test <- colnames(phenotypic.data.1)[c(2,5:39)]
+vars.test.ili.v2 <- c(patho.vars)
+
+data.for.testing.ili.v2 <- subset(data.set.ili.v2,
+                              select=c(vars.test.ili.v2,
+                                       bacterial.abund.ili.v2,
+                                       other,"stratum"))
+#head(data.for.testing)
+#saveRDS(data.for.testing, "ms/taxa_test/ctrl_ili/data.for.testing.ctrl.ili.rds")
+```
+
+## Type of vars 
+```{r eval=TRUE}
+
+TYPES.ili.v2 <- c(rep("ordinal",nocl.ili.v2),
+           rep("continuous",5),
+           "categorical")
+
+types.ili.v2 <- c(rep("categorical",length(vars.test.ili.v2)-2),
+           rep("dirac.and.continuous",length(bacterial.abund.ili.v2)),
+           rep("continuous",5),
+           "categorical")
+#colnames(data.for.testing)[1:10]
+
+```
+
+
+## Test associations   
+```{r}
+
+no.of.factors <- length(vars.test.ili.v2)
+aux.columns <- (length(vars.test.ili.v2)+1):(length(colnames(data.for.testing.ili.v2))-6)
+variables.of.interest <- names(data.for.testing.ili.v2)
+#nominal.bound.on.FDR <- 0.20
+log.scale <- TRUE
+
+```
+
+
+```{r eval=TRUE}
+#dir.create("../../test_stat")
+dir.create("06_taxa_associations/iliv2/")
+set.seed(1210125)
+check_association(data.for.testing.ili.v2,
+                  B = 100000,
+                  no.of.factors= no.of.factors,
+                  aux.columns = aux.columns,
+                  log.scale = TRUE,
+                  nominal.bound.on.FDR = 0.20,
+                  phen.data = pheno.data.ili.v2,
+                  compare.label="ili_v2",
+                  aux.TYPES=TYPES.ili.v2,
+                  cat.types = types.ili.v2,
+                  path_loc="06_taxa_associations/iliv2/",
+                  name.of.stratification= "Sex and age-group")
+```
+
+
+```{r}
+path.files <- "06_taxa_associations/iliv2/"
+pattern.name <- "SELECTED.associations.between."
+test.iliv2 <- combine_tables(path.files,pattern.name)
+test.iliv2$Association <- ifelse(test.iliv2$sign == -1, "Negative", "Positive")
+test.iliv2 <- test.iliv2 %>% 
+    filter(p.value <= 0.05)
+
+DT::datatable(test.iliv2)
+```
+
+
+# Check ILI V3 vs Pathogens  
+
+```{r}
+
+ps.iliv3 <- subset_samples(ps.main.2.genus, 
+                         condition_status == "acute_ili_recovery")
+
+# clean taxonomy
+ps.iliv3 <- prune_taxa(taxa_sums(ps.iliv3) > 0, ps.iliv3)
+
+```
+
+
+## Chnage metadata
+
+Add infection information from ili v1 to ili v3 microbiota 
+```{r}
+
+ili.v1.meta <- get_tibble(ps.iliv1, slot="sam_data")
+
+ps.iliv3.sub <- subset_samples(ps.iliv3, participant_id %in% ili.v1.meta$participant_id)
+
+ili.v1.meta <- ili.v1.meta %>% 
+  filter(participant_id %in% sample_data(ps.iliv3.sub)$participant_id) %>% 
+  as.data.frame() %>% 
+  column_to_rownames("participant_id")
+
+sample_names(ps.iliv3.sub) <- rownames(ili.v1.meta)
+sample_data(ps.iliv3.sub) <- sample_data(ili.v1.meta)
+
+table(sample_data(ps.iliv3.sub)$condition_status, sample_data(ps.iliv3.sub)$influenza_2014_any)
+table(sample_data(ps.iliv3)$condition_status, sample_data(ps.iliv3)$haemophilus_2014_any)
+
+ps.iliv3 <- ps.iliv3.sub
+```
+
+
+## Create taxa abundance table 
+```{r}
+
+asv.iliv3 <- transform_to_fractions(ps.iliv3, 
+                                    det.thres = 0.001,
+                                    prev.thres = 10/100)
+dim(asv.iliv3)
+#asv.tab.ctrl.ili[1:5,1:5]
+```
+
+
+## Prep metadata  
+
+```{r}
+#human_metapneumovirus_2014
+#respiratory_syncytial_virus_2014
+#human_parainfluenzavirus_2014_any 
+#rhinovirus_2014
+
+
+pheno.data.ili.v3 <- prep_metadata(ps.iliv3, 
+                                   sam.ids = "Sample_Name", 
+                                   ref.group="acute_ili", 
+                                   compare= "condition_status", 
+                                   confounder.vars = c("gender", "age_yrs_oct2014"),
+                                   var.interest=all.vars)
+
+head(pheno.data.ili.v3)
+
+
+pheno.data.ili.v3$human_metapneumovirus_2014[pheno.data.ili.v3$human_metapneumovirus_2014==3] <- 2
+
+pheno.data.ili.v3$human_metapneumovirus_2014[pheno.data.ili.v3$human_metapneumovirus_2014==3] <- 2
+pheno.data.ili.v3$respiratory_syncytial_virus_2014[pheno.data.ili.v3$respiratory_syncytial_virus_2014==3] <- 2
+
+pheno.data.ili.v3$human_parainfluenzavirus_2014_any[pheno.data.ili.v3$human_parainfluenzavirus_2014_any==3] <- 2
+
+pheno.data.ili.v3$rhinovirus_2014[pheno.data.ili.v3$rhinovirus_2014==3] <- 2
+
+#summary(pheno.data.ili.v2)
+```
+
+
+## Strata frequency  
+```{r eval=TRUE}
+frequency.of.strata <- table(pheno.data.ili.v3$stratum); mean(frequency.of.strata); frequency.of.strata
+```
+
+## Data for testing
+```{r}
+# remove firt column from asv_dat it is subject id
+asv.iliv3.dat <- dplyr::select(asv.iliv3, -ID) 
+# Create "data.set":
+data.set.ili.v3 <- cbind(pheno.data.ili.v3,asv.iliv3.dat)
+
+row.names(data.set.ili.v3) <- NULL
+# get only bacterial names
+
+#ncols.pheno.v2 <- ncol(pheno.data.v2) +1
+#nocl.v2 <- ncol(data.set.v2)-5
+
+ncols.pheno.ili.v3 <- ncol(pheno.data.ili.v3) +1
+
+nocl.ili.v3 <- ncol(data.set.ili.v3)-5
+bacterial.abund.ili.v3 <- names(data.set.ili.v3)[ ncols.pheno.ili.v3:nocl.ili.v3]
+
+other <- c("average","SD","prop.positive","entropy","CV")
+
+#vars.test <- colnames(phenotypic.data.1)[c(2,5:39)]
+vars.test.ili.v3 <- c(patho.vars)
+
+data.for.testing.ili.v3 <- subset(data.set.ili.v3,
+                              select=c(vars.test.ili.v3,
+                                       bacterial.abund.ili.v3,
+                                       other,"stratum"))
+#head(data.for.testing)
+#saveRDS(data.for.testing, "ms/taxa_test/ctrl_ili/data.for.testing.ctrl.ili.rds")
+```
+
+## Type of vars 
+```{r eval=TRUE}
+
+TYPES.ili.v3 <- c(rep("ordinal",nocl.ili.v3),
+           rep("continuous",5),
+           "categorical")
+
+types.ili.v3 <- c(rep("categorical",length(vars.test.ili.v3)-2),
+           rep("dirac.and.continuous",length(bacterial.abund.ili.v3)),
+           rep("continuous",5),
+           "categorical")
+#colnames(data.for.testing)[1:10]
+
+```
+
+
+## Test associations   
+```{r}
+
+no.of.factors <- length(vars.test.ili.v3)
+aux.columns <- (length(vars.test.ili.v3)+1):(length(colnames(data.for.testing.ili.v3))-6)
+variables.of.interest <- names(data.for.testing.ili.v3)
+#nominal.bound.on.FDR <- 0.20
+log.scale <- TRUE
+
+```
+
+
+```{r eval=TRUE}
+#dir.create("../../test_stat")
+dir.create("06_taxa_associations/iliv3/")
+set.seed(1210125)
+check_association(data.for.testing.ili.v3,
+                  B = 100000,
+                  no.of.factors= no.of.factors,
+                  aux.columns = aux.columns,
+                  log.scale = TRUE,
+                  nominal.bound.on.FDR = 0.20,
+                  phen.data = pheno.data.ili.v3,
+                  compare.label="ili_v3",
+                  aux.TYPES=TYPES.ili.v3,
+                  cat.types = types.ili.v3,
+                  path_loc="06_taxa_associations/iliv3/",
+                  name.of.stratification= "Sex and age-group")
+```
+
+```{r}
+path.files <- "06_taxa_associations/iliv3/"
+pattern.name <- "SELECTED.associations.between."
+test.iliv3 <- combine_tables(path.files,pattern.name)
+test.iliv3$Association <- ifelse(test.iliv3$sign == -1, "Negative", "Positive")
+test.iliv3 <- test.iliv3 %>% 
+    filter(p.value <= 0.05)
+
+DT::datatable(test.iliv3)
+```
+
+
+```{r}
+sessionInfo()
+```
+

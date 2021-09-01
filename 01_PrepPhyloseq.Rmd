@@ -1,0 +1,334 @@
+---
+title: "Respiratory microbiota ILI3 (organization)"
+author: "Sudarshan A. Shetty"
+date: "`r date()`"
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 2
+    toc_float: true
+editor_options: 
+  chunk_output_type: console
+---
+
+Raw sequencing data were proccessed in the main `respiratory.Rproj` project.  
+Folders were `dada2_processing`. We analyzed 5 (five) libraries, 384 samples in each including mocks and controls. The raw files are stored in `dada2_processing` folder.  
+
+Theese folders contain `dada2` processed data.   
+ *SeqLibrary* *Processing rmarkdown file*   
+* all_190524 `all_190524_respiratory_dada_illi3.rmd`  
+* all_191021 `all_191021_respiratory_dada_illi3.rmd`   
+* all_191029 `all_191029_respiratory_dada_illi3.rmd`  
+* all_191104 `all_191104_respiratory_dada_illi3.rmd`  
+* all_191118 `all_191118_respiratory_dada_illi3.rmd`      
+
+Copy the `seqtab.nochim_all_19xxxx.rds` from each of these folders and store them in a data folder within this project.  
+
+# Initiate  
+
+## Load pkgs  
+```{r warning=FALSE, message=FALSE}
+#BiocManager::install("DECIPHER")
+library(DECIPHER); packageVersion("DECIPHER")
+#BiocManager::install("DECIPHER")
+library(microbiome); packageVersion("microbiome")
+library(phyloseq); packageVersion("phyloseq")
+library(dada2); packageVersion("dada2")
+library(dplyr); packageVersion("dplyr")
+#library(readr)
+#library(readxl)
+library(tidyr); packageVersion("tidyr")
+library(tibble); packageVersion("tibble")
+#library(phangorn)
+#packageVersion("phangorn")
+```
+
+
+```{r}
+dir.create("data")
+dir.create("data/rds")
+
+```
+
+# Data  
+## Read data   
+```{r}
+
+seqtab_190524 <- readRDS("dada2Processed/seqtab.nochim_all_190524.rds") 
+seqtab_191021 <- readRDS("dada2Processed/seqtab.nochim_all_191021.rds") 
+seqtab_191029 <- readRDS("dada2Processed/seqtab.nochim_all_191029.rds") 
+seqtab_191104 <- readRDS("dada2Processed/seqtab.nochim_all_191104.rds") 
+seqtab_191118 <- readRDS("dada2Processed/seqtab.nochim_all_191118.rds") 
+
+
+# Total samples. 
+nrow(seqtab_190524) + nrow(seqtab_191021) + nrow(seqtab_191029) + nrow(seqtab_191104) + nrow(seqtab_191118)
+
+```
+
+
+Total of *1920* samples were sequenced. Including technical controls, samples i.e. naso- and oro- pharynx swabs.   Some samples were sequenced more than once.  
+
+Check if there is samples with no reads. 
+```{r}
+any(is.na(seqtab_190524))
+any(is.na(colnames(seqtab_190524)))
+any(is.na(rownames(seqtab_190524)))
+
+any(is.na(seqtab_191021))
+any(is.na(colnames(seqtab_191021)))
+any(is.na(rownames(seqtab_191021)))
+
+any(is.na(seqtab_191029))
+any(is.na(colnames(seqtab_191029)))
+any(is.na(rownames(seqtab_191029)))
+
+any(is.na(seqtab_191104))
+any(is.na(colnames(seqtab_191104)))
+any(is.na(rownames(seqtab_191104)))
+
+any(is.na(seqtab_191118))
+any(is.na(colnames(seqtab_191118)))
+any(is.na(rownames(seqtab_191118)))
+which(is.na(rownames(seqtab_191118)))
+
+```
+
+In library 191118, we have some samples with no reads.  
+
+```{r}
+
+na_sams <- c(which(is.na(rownames(seqtab_191118))))
+length(na_sams)
+dim(seqtab_191118)
+seqtab_191118.n <- seqtab_191118[-c(321:384),] 
+dim(seqtab_191118.n)
+
+```
+
+There are `64` samples with no reads after dada2 processing.  
+
+# Merge seqtabs  
+*Merge all ASV tables*  
+```{r}
+
+st.all <- mergeSequenceTables(seqtab_190524, 
+                              seqtab_191021, 
+                              seqtab_191029,
+                              seqtab_191104,
+                              seqtab_191118.n,
+                              tryRC = F)
+class(st.all)
+dim(st.all)
+
+saveRDS(st.all, "data/rds/seqtab_all.rds")
+```
+
+There are in total, `1856` samples and `10535` ASVs after processing four libraries.
+
+# Assign taxonomy   
+
+## Import  
+
+```{r}
+st.all <- readRDS("data/rds/seqtab_all.rds")
+
+# Create a DNAStringSet from the ASVs
+dna <- DNAStringSet(getSequences(st.all)) 
+
+```
+
+
+## assignTaxonomy  
+Use the latest **SILVA v138** database.  
+Ref source: Michael R. McLaren. (2020). Silva SSU taxonomic training data formatted for DADA2 (Silva version 138) (Version 2) [Data set]. Zenodo. http://doi.org/10.5281/zenodo.3986799
+```{r}
+set.seed(1712021)
+taxa <- assignTaxonomy(dna, 
+                       refFasta = "silvaDBv138/silva_nr99_v138_train_set.fa.gz", 
+                       minBoot=80,
+                       multithread = 4,
+                       tryRC = TRUE,
+                       verbose = TRUE)
+
+
+taxaSpecies <- addSpecies(taxa, 
+                          "silvaDBv138/silva_species_assignment_v138.fa.gz",
+                          verbose=TRUE)
+
+# 1126 out of 10535 were assigned to the species level.
+# Of which 902 had genera consistent with the input table.
+saveRDS(taxa, "data/rds/taxa_silva138.rds")
+
+saveRDS(taxaSpecies, "data/rds/taxaSpecies_silva138.rds")
+```
+
+```{r}
+head(taxaSpecies)
+```
+
+***
+Save ASV and taxonomy tables:
+
+# Make phyloseq object  
+
+```{r}
+
+st.all <- readRDS("data/rds/seqtab_all.rds")
+
+taxa_sp <- readRDS("data/rds/taxaSpecies_silva138.rds") # CHANGE ME
+
+sam.data <- readRDS("data/rds/sampleData_tibble.rds")
+rownames(sam.data) <- sam.data$SampleID
+
+```
+
+Remove samples with less than 100 reads (679 samples were removed). Remaining will be processed during exploratory analysis.  
+
+```{r}
+dim(st.all)
+
+st.all <- st.all[rowSums(st.all) > 100,]
+rownames(st.all) <- gsub("_[A-S][0-9]*", "", rownames(st.all))
+
+#1856 - 1177
+```
+
+
+## Get controls  
+
+ Listing negative controls  
+
+```{r}
+
+ctrl_meta <- read_tsv("data/meta/control_samples_meta.txt") %>% as.data.frame()
+
+
+rownames(ctrl_meta) <- ctrl_meta$Sample_Name
+
+ps.controls <- phyloseq(otu_table(st.all, taxa_are_rows=FALSE), 
+               sample_data(ctrl_meta), 
+               tax_table(taxa_sp))
+print(ps.controls)
+
+```
+
+```{r}
+tax_tb <- as(tax_table(ps.controls),"matrix") %>% 
+  as.data.frame() %>% 
+  rownames_to_column("ASV") %>% 
+  mutate(Genus.Species = ifelse(!is.na(Species), paste0(Genus, ".", Species), Species)) %>% 
+  select(-Species)
+#tax_tb[1:30, 5:9]
+rownames(tax_tb) <- tax_tb$ASV
+tax_tb <- tax_tb[,-1]
+
+tax_table(ps.controls) <- tax_table(as.matrix(tax_tb))  
+
+
+```
+
+
+## Get Samples  
+
+The sample data `sampleData_tibble.rds` consists of samples that are part of this study and are anonymized to remove participant information.   
+
+```{r}
+
+ps <- phyloseq(otu_table(st.all, taxa_are_rows=FALSE), 
+               sample_data(sam.data), 
+               tax_table(taxa_sp))
+print(ps)
+
+
+```
+
+
+## Fix tax table  
+The tax table has species names only. Will combine genus and species.  
+
+```{r}
+tax_tb <- as(tax_table(ps),"matrix") %>% 
+  as.data.frame() %>% 
+  rownames_to_column("ASV") %>% 
+  mutate(Genus.Species = ifelse(!is.na(Species), paste0(Genus, ".", Species), Species)) %>% 
+  select(-Species)
+#tax_tb[1:30, 5:9]
+rownames(tax_tb) <- tax_tb$ASV
+tax_tb <- tax_tb[,-1]
+
+tax_table(ps) <- tax_table(as.matrix(tax_tb))
+
+```
+
+```{r}
+# before and after metadata added
+1177-1072
+
+```
+
+We removed 105 that are not part of this microbiota study, as they are not in the curated sample sheet of this study. 
+
+## Merge control and sample  
+
+```{r}
+
+ps.total <- merge_phyloseq(ps, ps.controls)
+  
+```
+
+
+## Add refseq  
+
+```{r}
+ps.total <- microbiomeutilities::add_refseq(ps.total, tag="ASV")
+```
+
+## Save total pseq  
+
+```{r}
+saveRDS(ps.total, "data/rds/ps.total.rds")
+```
+
+
+## Dada2 pipeline 
+```{r}
+library(data.table)
+list_of_files <- list.files(path = "dada2Processed/trackingReads", recursive = TRUE,
+                            pattern = "\\.txt$", 
+                            full.names = TRUE)
+dada2.pipeline <-rbindlist(sapply(list_of_files, fread, simplify = FALSE),
+                use.names = TRUE, idcol = "FileName")
+
+dada2.pipeline$FileName <- gsub("dada2Processed/trackingReads/Tract table_", "", dada2.pipeline$FileName)
+# Read all the files and create a FileName column to store filenames
+dada2.pipeline$FileName <- gsub(".txt", "", dada2.pipeline$FileName) 
+
+reads_dada2 <- dada2.pipeline %>% 
+  summarise(total_reads_input = sum(input),
+            mean_reads_input = mean(input),
+            std_reads_input = sd(input),
+            total_reads_tabled = sum(tabled),
+            mean_reads_tabled = mean(tabled),
+            std_reads_tabled = sd(tabled),
+            total_reads_nonchim = sum(nonchim),
+            mean_reads_nonchim = mean(nonchim),
+            std_reads_nonchim = sd(nonchim))
+
+reads_dada2 %>% 
+  select(total_reads_input, total_reads_tabled, total_reads_nonchim) 
+
+# total_reads_input 31699289           
+# total_reads_tabled 31088843
+# total_reads_nonchim 29899501
+
+```
+
+
+
+
+
+```{r}
+sessionInfo()
+```
+

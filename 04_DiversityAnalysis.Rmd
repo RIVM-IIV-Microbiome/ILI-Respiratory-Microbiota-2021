@@ -1,0 +1,949 @@
+---
+title: "The nasopharyngeal microbiota of elderly subjects with and without influenza-like illness"
+subtitle: "Global analysis: Alpha and Beta Diversity and Composition"
+author: "Sudarshan A. Shetty"
+date: "`r date()`"
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 2
+    toc_float: true
+---
+
+
+# Analysis   
+
+## Load pkgs    
+```{r libraries, warning=FALSE, message=FALSE}
+
+library(microbiome); #packageVersion("microbiome")
+library(phyloseq) #packageVersion("phyloseq")
+library(dplyr) #packageVersion("dplyr")
+library(ggpubr) #packageVersion("ggpubr")
+library(patchwork) #packageVersion("patchwork")
+library(tibble)
+library(tidyr)
+library(readr)
+library(vegan)
+library(gghalves)
+library(reshape)
+library(microbiomeutilities)
+library(MiSPU)
+library(rstatix)
+#library(phangorn)
+theme_set(theme_bw())
+#source("codes/custom_codes.R")
+source("codes/generalCodes.R")
+
+dir.create("04_DiversityAnalysis")
+dir.create("04_DiversityAnalysis/alpha_beta")
+
+```
+
+
+Read the phyloseq object created `01_ili_deomographics.rmd`    
+
+```{r var-cols}
+
+dis_col <- c(acute_ili="#6883ba", control= "#166f65", `NA`="black",
+             acute_ili_14_days = "#6d597a", control_14_days = "#87d2c9", 
+             acute_ili_recovery = "#e56b6f") 
+
+```
+
+## Import  
+
+```{r}
+ps.main <- readRDS("data/rds/ps.clean.rds")
+print_ps(ps.main)
+```
+
+
+```{r}
+table(meta(ps.main)$condition_group)
+table(meta(ps.main)$condition_status)
+```
+
+
+```{r}
+get_taxa_unique(ps.main, "Phylum")
+```
+
+
+
+```{r}
+metadf.so <- meta(ps.main) %>% 
+   group_by(participant_id) %>% arrange(desc(condition_status)) %>% 
+                    summarise(samples_for = paste(unique(condition_status), collapse = ","))
+knitr::kable(table(metadf.so$samples_for))
+```
+
+
+# Microbial Composition   
+
+Which phyla are detected  
+
+```{r}
+get_taxa_unique(ps.main, "Phylum")
+```
+
+### Phylum  
+
+```{r}
+
+comptab <- phy_to_ldf(ps.main, transform.counts = NULL)
+#head(comptab)
+
+phylum_overview <- comptab %>% 
+  group_by(Phylum) %>% 
+  summarise(counts=sum(Abundance)) %>% 
+  ungroup %>% 
+  mutate(Percent = counts/sum(counts)*100) %>% 
+  arrange(desc(Percent))
+
+write_csv(phylum_overview,"04_DiversityAnalysis/alpha_beta/phylum_overview.csv")
+
+#phyla_df2 <- get_tax_table(ps.main.2.rel, "Phylum", "04_DiversityAnalysis/alpha_beta/")
+knitr::kable(phylum_overview)
+```
+
+## Genus
+```{r}
+genus_overview <- comptab %>% 
+  group_by(Genus) %>% 
+  summarise(counts=sum(Abundance)) %>% 
+  ungroup %>% 
+  mutate(Percent = counts/sum(counts)*100) %>% 
+  arrange(desc(Percent))
+write_csv(genus_overview,"04_DiversityAnalysis/alpha_beta/genus_overview.csv")
+head(knitr::kable(genus_overview))
+```
+
+
+## Dominant taxa overall  
+```{r}
+genus_dominant <- dominant_taxa(ps.main, level = "Genus")
+knitr::kable(genus_dominant$dominant_overview)
+```
+
+## Dominant genus group
+```{r}
+genus_dominant_grp <- dominant_taxa(ps.main, level = "Genus", group = "condition_status")
+
+sore_overview <- genus_dominant_grp$dominant_overview %>% 
+  dplyr::select(condition_status, dominant_taxa,rel.freq) %>% 
+  pivot_wider(names_from = dominant_taxa, values_from = rel.freq)
+write_csv(genus_overview,"04_DiversityAnalysis/alpha_beta/dominant_genus_overview.csv")
+
+sore_overview
+```
+
+
+Before calculating the beta diversity, we need to check for dominance.
+One of the features of respiratory microbiota is dominance of few taxa, in many cases single taxon can > 50% of the community.  
+Check this using dominance index in microbiome R pkg.  
+
+```{r fig.height=3, fig.width=4}
+
+dominance.naso <- dominance(ps.main)
+pdf("04_DiversityAnalysis/alpha_beta/freq_dominant_abundance.pdf", height = 3, width = 6)
+hist(dominance.naso$relative,
+     main = "Frequency of relative abudance of a single taxon \ndominating the community",
+     xlab = "Relative abundance")
+dev.off()
+
+
+```
+
+```{r}
+# total
+length(dominance.naso$relative)
+length(which(dominance.naso$relative > 0.5))/length(dominance.naso$relative) *100
+length(which(dominance.naso$relative > 0.6))/length(dominance.naso$relative) *100
+length(which(dominance.naso$relative > 0.7))/length(dominance.naso$relative) *100
+length(which(dominance.naso$relative > 0.8))/length(dominance.naso$relative) *100
+length(which(dominance.naso$relative > 0.9))/length(dominance.naso$relative) *100
+```
+
+In nearly 47% of the samples, a single taxon contributes >50% of the realtive abudance.  
+
+Alternatively, coverage can also be used to see how many taxa contribute to 50% of the abundance.  
+```{r}
+coverage.tb <- microbiome::coverage(ps.main, 0.5) 
+hist(coverage.tb,
+     main = "Frequency of a single taxon \ndominating the community")
+```
+
+## Ratio  
+Agglomerate at genus and save
+```{r}
+ps.main.genus <- tax_glom(ps.main, "Genus",NArm=FALSE)
+```
+
+Corynebacterium, Moraxella, Staphylococcus 
+
+```{r}
+# asv <- which(rownames(tax_table(ps.main.genus)["Genus"])) 
+cory.abund <- abundances(ps.main.genus, "compositional")["ASV1",]
+mora.abund <- abundances(ps.main.genus, "compositional")["ASV2",]
+
+plot(log10(cory.abund +1), log10(mora.abund +1))
+
+abline()
+cor.test(cory.abund, mora.abund, method = "spearman",exact = FALSE)
+
+```
+
+Corynebacterium and Moraxella have negative correlation rho=-0.37 and p-value < 2.2e-16. 
+
+## Calculate ratio  
+
+```{r}
+
+sample_data(ps.main.genus)$CM_ratio <- cory.abund/mora.abund
+
+sample_data(ps.main)$CM_ratio <- cory.abund/mora.abund
+
+saveRDS(ps.main.genus, "data/rds/ps.main.genus.rds")
+
+```
+
+# Root tree 
+```{r}
+set.seed(13241)
+my.tree <- phy_tree(ps.main)
+out.group <- pick_new_outgroup(my.tree)
+out.group 
+
+tax_table(ps.main)[out.group,]
+new.tree <- ape::root(my.tree, outgroup=out.group, resolve.root=TRUE)
+phy_tree(ps.main) <- new.tree
+phy_tree(ps.main)
+
+saveRDS(ps.main, "data/rds/ps.main.rds")
+```
+
+
+```{r}
+print_ps(ps.main)
+
+```
+
+Check samples and groups  
+```{r}
+#sample_sums(ps.main)[1:6]
+meta(ps.main) %>% 
+  group_by(condition_status) %>% tally() %>% 
+  mutate(rel.freq = round(100 * n/sum(n), 1),
+         rel.freq.pct = paste0(round(100 * n/sum(n), 0), "%"))
+
+```
+
+We have several participants in control group `control` who were sampled twice `few` days apart. For cross-sectional anlaysis, we will randomly select one sample from each participant.  
+Take unique samples from control group. 
+
+```{r}
+
+# Subset metadata to pick control samples
+ctrl_meta <- meta(ps.main) %>% 
+  subset(condition_group=="control")
+
+length(unique(ctrl_meta$DEELnr))
+# 155 participants ctrl
+table(ctrl_meta$condition_status)
+
+df.ctrl <- data.frame(table(ctrl_meta$participant_id))
+table(df.ctrl$Freq)
+# 79 have two timepoints 
+rownames(ctrl_meta) <- ctrl_meta$Sample_Name
+
+ctrl_meta$seq_sam_name <- as.character(ctrl_meta$Sample_Name)
+
+# pick one sample at random
+set.seed(2367)
+df.n <- NULL
+for(i in unique(ctrl_meta$participant_id)){
+  st <- sample(rownames(subset(ctrl_meta, participant_id== i)), 1)
+  df.n <- rbind(df.n, c(i,st))
+}
+df.n <- as.data.frame(df.n)
+
+sample_control <- subset_samples(ps.main, condition_group=="control")
+sample_ili <- subset_samples(ps.main, condition_group!="control")
+
+# subset control ps with only randomly picked saamples. df.n
+sample_control_sub <- prune_samples(sample_names(sample_control) %in% df.n$V2, sample_control)
+sample_data(sample_control_sub)$condition_status <- ifelse(sample_data(sample_control_sub)$condition_status=="control_14_days", "control", "control")
+ps.main.2 <- merge_phyloseq(sample_control_sub,sample_ili)
+table(meta(ps.main.2)$condition_status)
+```
+
+## Add bacteria or virus  
+```{r}
+meta.df <- meta(ps.main.2) %>% 
+  filter(condition_status=="acute_ili")
+
+virus <- meta.df %>% 
+  filter(influenza_2014_any=="1" | bocavirus_2014 == "1" | coronavirus_2014=="1" |human_metapneumovirus_2014=="1"|human_parainfluenzavirus_2014_any=="1" | rhinovirus_2014=="1"|respiratory_syncytial_virus_2014=="1"|adeno_2014=="1")
+
+bacter <- meta.df %>% 
+  filter(bordetella_pertussis_2014=="1" | haemophilus_2014_any == "1" | haemolytic_streptococcus_2014=="1" |legionella_pneumophila_2014=="1" |moraxella_catarrhalis_2014=="1" | mycoplasma_pneumoniae_2014=="1" | staphylococcus_aureus_2014=="1" | streptococcus_pneumoniae_2014=="1")
+
+dim(virus)
+dim(bacter)
+
+both <- intersect(bacter$participant_id, virus$participant_id)
+
+virus.only <- setdiff(virus$participant_id, both)
+bacter.only <- setdiff(bacter$participant_id, both)
+#infl_sam <- 
+meta.df.patho <- meta(ps.main.2) %>% 
+  mutate(baceria_virus=ifelse(participant_id %in% both, "bacteria_virus", 
+                              ifelse(participant_id %in% virus.only, "virus", 
+                                     ifelse(participant_id %in% bacter.only, "bacteria","unk"))))
+
+table(meta.df.patho$baceria_virus)
+dim(meta.df.patho)
+rownames(meta.df.patho) <- meta.df.patho$Sample_Name
+sample_data(ps.main.2) <- sample_data(meta.df.patho)
+```
+
+
+```{r}
+# save this for future analysis.  
+saveRDS(ps.main.2,"data/rds/ps.main.2.rds")
+```
+
+# Alpha diversity   
+
+## Rarefied data  
+
+```{r}
+ps.main.2 <- readRDS("data/rds/ps.main.2.rds")
+set.seed(18474)
+
+ps.main.rar <- rarefy_even_depth(ps.main.2, sample.size = min(sample_sums(ps.main.2)))
+#410OTUs were removed because they are no longe
+```
+
+## Calculate diversities    
+
+## Calculate alpha   
+
+We calculate `phylogenetic diversity`, `simpson evenness`
+
+```{r}
+
+ps.main.rar <- phyloDiversity(ps.main.rar)
+#"PD"                                 "SR"
+global.div <- get_tibble(ps.main.rar, slot="sam_data")
+
+# calculate simpson, combine with pd plus meta and convert to longformat.
+global.div.tb <-
+  ps.main.rar %>% 
+  microbiome::evenness(index="simpson") %>%
+  data.frame(simpson=.) %>%
+  rownames_to_column("SampleID") %>%
+  left_join(global.div) %>% 
+  dplyr::select(c(SampleID,condition_status,
+         condition_group,participant_id, 
+         gender, age_yrs_oct2014,BMI_2014,
+         simpson, PD,influenza_2014_any)) %>% 
+  dplyr::rename(`Simpson Evenness` = simpson, `Phylogenetic Diversity` = PD) %>% 
+  tidyr::pivot_longer(cols = c(`Simpson Evenness`, `Phylogenetic Diversity`))
+
+```
+
+
+
+```{r fig.width=8, fig.height=4}
+# make comparison pairs to test  
+group.pairs <- make_pairs(global.div.tb$condition_status)
+# order of x-axis in plot
+group.order <- c('control','acute_ili','acute_ili_14_days','acute_ili_recovery')
+grp.order <- group.order
+global.div.tb$condition_status <- factor(global.div.tb$condition_status ,
+                                            levels = group.order)
+
+alpha.div.plot <- global.div.tb %>% 
+  ggplot(aes(condition_status, value, fill = condition_status)) +
+  geom_point(aes(color = condition_status),
+             position = position_jitter(width = 0.15),
+             size = 2, alpha = 0.25) +
+  geom_boxplot(width = 0.2, outlier.shape = NA,
+               alpha = 0.5) +
+  geom_half_violin(position = position_nudge(x = 0.15, y = 0),
+                   alpha = 0.25, side = "r") +
+  #guides(fill = T, color = T) +
+  #stat_compare_means(comparisons = group.pairs) +
+  scale_fill_manual(values = dis_col) +
+  scale_colour_manual(values = dis_col) +
+  facet_wrap(.~name, scales = "free") +
+  theme_biome_utils() + xlab("") +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank())
+
+alpha.div.plot
+
+```
+
+
+```{r}
+
+ggsave("04_DiversityAnalysis/alpha_beta/alpha_pd_simpson.pdf", height = 4, width = 8)
+ggsave("04_DiversityAnalysis/alpha_beta/alpha_pd_simpson.tiff", height = 4, width = 8)
+
+```
+
+Control versus 14days ILI is significantly different in evenness.  
+
+## Statistics  
+
+```{r}
+
+global.div.tb %>% 
+  filter(name =="Simpson Evenness") %>% 
+  wilcox_test(value ~ condition_status, p.adjust.method = "BH") %>% 
+  filter(p.adj <= 0.05)
+
+global.div.tb %>% 
+  filter(name =="Phylogenetic Diversity") %>% 
+  wilcox_test(value ~ condition_status, p.adjust.method = "BH") %>% 
+  filter(p.adj <= 0.05)
+```
+
+```{r}
+global.div.tb %>% 
+  filter(name =="Phylogenetic Diversity" & condition_status=="acute_ili") %>% 
+  wilcox_test(value ~ influenza_2014_any, p.adjust.method = "BH") %>% 
+  filter(p.adj <= 0.05)
+```
+
+
+# Beta diversity  
+
+**Using relative abundances**  
+```{r}
+
+ps.main.2.rel <- microbiome::transform(ps.main.2, "compositional")
+
+```
+
+
+Therefore, we test different weights for abundant taxon using `GUniFrac`  
+
+```{r}
+#dominant_taxa(ps.main.2, level = "Genus")
+```
+
+
+## GUniFrac  
+
+Use rarefied data
+```{r eval=TRUE}
+
+# Use GUniFrac from MiSPU R pks as it is faster. 
+# GUniFrac
+gunifracs <- GUniFrac(t(abundances(ps.main.rar)), 
+                      tree=ps.main.rar@phy_tree, 
+                      alpha=c(0, 0.2, 0.3, 0.4, 0.5, 1))
+
+saveRDS(gunifracs, "data/rds/gunifracs.rds")
+
+```
+
+
+```{r}
+
+gunifracs <- readRDS( "data/rds/gunifracs.rds")
+
+guni_unweighted <- gunifracs$GUniF[, , 1]
+colnames(guni_unweighted) <- sample_names(ps.main.rar)
+rownames(guni_unweighted) <- sample_names(ps.main.rar)
+
+guni_weighted_0.2 <- gunifracs$GUniF[, , 2]
+
+guni_weighted_0.3 <- gunifracs$GUniF[, , 3]
+guni_weighted_0.4 <- gunifracs$GUniF[, , 4]
+
+guni_weighted_0.5 <- gunifracs$GUniF[, , 5]
+colnames(guni_weighted_0.5) <- sample_names(ps.main.rar)
+rownames(guni_weighted_0.5) <- sample_names(ps.main.rar)
+
+guni_weighted_1 <- gunifracs$GUniF[, , 6]
+colnames(guni_weighted_1) <- sample_names(ps.main.rar)
+rownames(guni_weighted_1) <- sample_names(ps.main.rar)
+```
+
+
+## Compute anosim  
+```{r}
+# Ordinate the data
+set.seed(2852020)
+#adonis
+groups.compare <- sample_data(ps.main.rar)$condition_status
+anosim_unweighted <- vegan::anosim(as.dist(guni_unweighted), 
+                                      grouping = groups.compare, 
+                                      permutations=999)
+summary(anosim_unweighted)
+
+#groups.compare <- sample_data(ps.main.rar)$condition_status
+anosim_gunifrac <- vegan::anosim(as.dist(guni_weighted_0.5), 
+                                    grouping = groups.compare, 
+                                    permutations=999)
+summary(anosim_gunifrac)
+
+anosim_unifrac <- vegan::anosim(as.dist(guni_weighted_1), 
+                                    grouping = groups.compare, 
+                                    permutations=999)
+summary(anosim_unifrac)
+
+#round(permanova_all$aov.tab.list[[1]]$R2[1], 5)
+#round(permanova_all$aov.tab.list[[1]]$`Pr(>F)`[1], 5)
+```
+
+## Plot Ordination    
+
+```{r}
+
+p.uw <- plot_ordination_gg(ps.main.rar, 
+                           ord = ordinate(ps.main.rar, "MDS", 
+                                          distance =as.dist(guni_unweighted))) + 
+  labs(subtitle = paste0("UnWeighted UniFrac", "\nANOSIM; R = ", round(anosim_unweighted$statistic, 5), " and p= ",
+                         round(anosim_unweighted$signif, 5))) +
+  theme_minimal(base_size = 8) + theme(legend.position = "none")
+
+p.w0.5 <- plot_ordination_gg(ps.main.rar,  
+                             ord = ordinate(ps.main.rar, "MDS", 
+                                            distance =as.dist(guni_weighted_0.5))) + 
+  labs(subtitle = paste0("GUniFrac", "\nANOSIM; R = ", round(anosim_gunifrac$statistic, 5), " and p= ",
+                         round(anosim_gunifrac$signif, 5)))+
+  theme_minimal(base_size = 8) + theme(legend.position = "none")
+
+
+
+p.w1 <- plot_ordination_gg(ps.main.rar,  
+                           ordinate(ps.main.rar, "MDS", 
+                                    distance =as.dist(guni_weighted_1))) + 
+  labs(subtitle = paste0("Weighted UniFrac", "\nANOSIM; R = ", round(anosim_unifrac$statistic, 5), " and p= ",
+                         round(anosim_unifrac$signif, 5))) +
+  theme_minimal(base_size = 8) + theme(legend.position = "none")
+ord.plots <- (p.uw | p.w0.5 | p.w1)
+
+```
+
+
+```{r}
+
+ord.plots <- (p.uw | p.w0.5 | p.w1) + 
+  plot_layout(guides = "collect") 
+  
+
+ggsave("04_DiversityAnalysis/alpha_beta/all_GUniFrac_ordination.pdf", height = 4, width = 10)
+ggsave("04_DiversityAnalysis/alpha_beta/all_GUniFrac_ordination.tiff", height = 4, width = 10)
+```
+
+In the comparisons above, the major variation between samples can be explained by dominant taxa. Presence absence of taxa does not have any significant impact on community level differences between groups.    
+
+```{r fig.height=8, fig.width=14}
+alpha.div.plot / ord.plots + plot_annotation(tag_levels = "A")
+ggsave("04_DiversityAnalysis/alpha_beta/alphaDiv_ordination.pdf", height = 8, width = 14)
+ggsave("04_DiversityAnalysis/alpha_beta/alphaDiv_ordination.tiff", height = 8, width = 14)
+```
+
+
+At this point, we would like to check pairwise differences between groups.  
+
+```{r}
+set.seed(114325)
+comparisons <- make_pairs(meta(ps.main.rar)$condition_status)
+
+weightedf_unifrac_anosim <- calculate_gunifrac_anosim(ps.main.rar, 
+                                                     dist=guni_weighted_1, 
+                                                     comparisons= comparisons)
+weightedf_unifrac_anosim$Method <- "Weighted UniFrac"
+
+weightedf_Gunifrac_anosim <- calculate_gunifrac_anosim(ps.main.rar, 
+                                                     dist=guni_weighted_0.5, 
+                                                     comparisons= comparisons)
+weightedf_Gunifrac_anosim$Method <- "GUniFrac"
+
+Unweightedf_unifrac_anosim <- calculate_gunifrac_anosim(ps.main.rar, 
+                                                     dist=guni_unweighted, 
+                                                     comparisons= comparisons)
+Unweightedf_unifrac_anosim$Method <- "Unweighted UniFrac"
+
+all_pairs_anosim <- bind_rows(weightedf_unifrac_anosim,weightedf_Gunifrac_anosim,Unweightedf_unifrac_anosim)
+write.table(all_pairs_anosim, "04_DiversityAnalysis/alpha_beta/all_pairs_anosim.txt", sep="\t", row.names = F)
+
+knitr::kable(all_pairs_anosim)
+```
+
+
+## Plot pairwise anosim  
+```{r}
+str(all_pairs_anosim)
+all_pairs_anosim$R <- as.numeric(all_pairs_anosim$R)
+all_pairs_anosim$Pval <- as.numeric(all_pairs_anosim$Pval)
+all_anosim_tb <- all_pairs_anosim %>% 
+  tidyr::separate(col= Comparison, c("Group 1", "Group 2"), sep = "vs") %>% 
+  mutate(Significant = ifelse(Pval <= 0.05, "Yes", "No"))
+
+knitr::kable(all_anosim_tb)
+```
+
+
+# Divergence  
+
+Condition status show significant effects.  
+
+## Baseline i.e. No reported Ili-group  
+
+
+```{r}
+#ps.main.rel.2 <- microbiome::transform(ps.main.2.rel, "compositional")
+
+table(meta(ps.main.rar)$condition_status)
+```
+The lowest is 150 samples in acute_ili group.  
+
+```{r}
+
+baseline_ps_v1 <- subset_samples(ps.main.rar, condition_status == "control") 
+baseline_ps_v1 <- prune_taxa(taxa_sums(baseline_ps_v1) > 0, baseline_ps_v1)
+
+```
+
+
+```{r}
+
+meta_tib <- get_tibble(ps.main.rar, slot="sam_data") %>% 
+   dplyr::select(column_id, condition_status, condition_group, gender, age_yrs_oct2014)
+  
+
+all_gunifrac <- reshape2::melt(guni_weighted_0.5,
+                               value.name = "GUniFrac") %>% 
+  dplyr::rename(SampleID_1 = Var1, SampleID_2=Var2) %>% 
+  left_join(meta_tib, by = c("SampleID_1" = "column_id")) %>% 
+  left_join(meta_tib, by = c("SampleID_2" = "column_id"),suffix = c("_1", "_2"))  %>% 
+  filter(SampleID_1!=SampleID_2) # remove self distance
+#head(all_gunifrac)
+
+# we would like to check within group distance between samples.  
+# we can group by samples and keep only those from one group. 
+within_grp <- all_gunifrac %>% 
+  # kepp only those that match like control==control
+  filter(condition_status_1 == condition_status_2) %>% 
+  mutate(comparison= condition_status_1) %>% 
+  group_by(SampleID_1,comparison) %>% 
+  summarise(mean_gunifract= mean(GUniFrac))
+# 052_052	0.3135172			
+# 052_053	0.3390408	
+
+```
+
+## Plot within  
+
+```{r warning=FALSE}
+
+within_grp$comparison <- factor(within_grp$comparison, levels = c('control','acute_ili','acute_ili_14_days','acute_ili_recovery'))
+comps <- make_pairs(within_grp$comparison)
+
+p.div <- ggplot(within_grp, aes(comparison,mean_gunifract)) + 
+  geom_half_violin(aes(fill = comparison), 
+                   position = position_nudge(x = 0.15, y = 0), 
+                   alpha = 0.25, side = "r") +
+  geom_point(aes(y = mean_gunifract, color = comparison), 
+             position = position_jitter(width = 0.15), 
+             size = 1, alpha = 0.25) +
+  geom_boxplot(aes(fill = comparison),
+               width = 0.2, outlier.shape = NA, 
+               alpha = 0.25) +
+  #guides(fill = FALSE, color = FALSE) +
+  scale_fill_manual(values = dis_col) +
+  scale_colour_manual(values = dis_col) +
+  stat_compare_means(aes(label=..p.adj..), 
+                     comparisons = comps, 
+                     hide.ns = TRUE,
+                     p.adjust.method = "BH",
+                     ref.group = "control") + 
+  theme_biome_utils() +
+  ylab("Within-group (GUniFrac dissimilarity") + 
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        legend.position = "right") +
+  xlab("")
+p.div
+ggsave("04_DiversityAnalysis/alpha_beta/within_gunifrac.pdf", height = 4, width = 6)
+ggsave("04_DiversityAnalysis/alpha_beta/within_gunifrac.tiff", height = 4, width = 6)
+```
+### Raw figs 
+```{r}
+pleg <- get_legend(p.div)
+(alpha.div.plot | p.div) / ord.plots + 
+  plot_annotation(tag_levels = "A") + 
+  plot_layout(guides = "collect")
+ggsave("04_DiversityAnalysis/alpha_beta/alphaDivergenceOrdination.pdf", height = 8, width = 14)
+ggsave("04_DiversityAnalysis/alpha_beta/alphaDivergenceOrdination.tiff", height = 8, width = 14)
+```
+
+### Figure 1  
+```{r fig.height=8, fig.width=12}
+dir.create("msfigs")
+# alpha div
+alpha.plo <- alpha.div.plot + 
+  theme_minimal(base_size = 8) + 
+  theme(strip.text = element_text(size=8),
+        legend.position = "none",
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank()) +
+  labs(title = 'A')
+
+p.div.p <- p.div + theme_minimal(base_size = 8) + 
+  theme(#legend.position = "none",
+    legend.text = element_text(size=12),
+    legend.title = element_text(size=12),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank())  +
+  labs(title = 'B')
+
+
+pcoa <- ((p.uw + labs(title="C") | p.w0.5 | p.w1))
+
+pcoa <- pcoa +  
+  theme_minimal(base_size = 8) + 
+  theme(strip.text = element_text(size=8),
+        legend.position = "none",
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank()) +
+  #labs(subtitle = 'C') +
+  plot_annotation(title = 'C')
+
+
+(alpha.plo | p.div.p) / (pcoa) #+ plot_layout(widths = c(1,1,0.5)) #+ plot_annotation(tag_levels = "A")
+
+ggsave("msfigs/figure 1.pdf", height = 6, width = 9)
+#ggsave("msfigs/figure 1.tiff", height = 5, width = 9)
+```
+
+
+# Composition analysis   
+
+Comparison of taxonomic composition in different groups.  
+
+Top 4 phyla  
+```{r fig.height=6}
+
+order_stats <- c("control","acute_ili","acute_ili_14_days","acute_ili_recovery")
+
+pn <- plot_taxa_boxplot(ps.main.2,
+                        taxonomic.level = "Phylum",
+                        top.otu = 4, 
+                        group = "condition_status",
+                        add.violin= TRUE,
+                        title = NULL, 
+                        keep.other = FALSE,
+                        group.order = order_stats,
+                        group.colors = dis_col,
+                        dot.size = 1)
+
+comps <- make_pairs(sample_data(ps.main.2)$condition_status)
+
+pn <- pn + stat_compare_means(
+  aes(label=..p.adj..), 
+  comparisons = comps, 
+  hide.ns = TRUE,
+  p.adjust.method = "BH",
+  tip.length = 0.05,
+  method = "wilcox.test"
+  )
+
+pn <- pn+ theme_minimal()+ ylab("Relative abundance") 
+pn
+
+ggsave("04_DiversityAnalysis/alpha_beta/top_4_phyla.pdf", height = 6, width = 8)
+```
+
+#### Supp Figure 
+```{r}
+
+ggsave("msfigs/Supp figure top phyla.pdf", height = 5, width = 9)
+
+```
+
+## Plot ratio test 
+```{r fig.height=4, fig.width=6}
+order_stats <- c("control","acute_ili","acute_ili_14_days","acute_ili_recovery")
+ratio_tib <- get_tibble(ps.main.2, slot="sam_data")
+
+ratio_tib$condition_status <- factor(ratio_tib$condition_status ,
+                                            levels = order_stats)
+
+group.pairs <- make_pairs(sample_data(ps.main.2)$condition_status)
+ratio_plot <- ratio_tib %>% 
+  ggplot(aes(condition_status,log10(CM_ratio))) +
+  geom_half_violin(aes(fill = condition_status), 
+                   position = position_nudge(x = 0.15, y = 0), 
+                   alpha = 0.25, side = "r") +
+  geom_point(aes(y = log10(CM_ratio), color = condition_status), 
+             position = position_jitter(width = 0.15), 
+             size = 1, alpha = 0.25) +
+  geom_boxplot(aes(fill = condition_status),
+               width = 0.2, outlier.shape = NA, 
+               alpha = 0.25) +
+  #guides(fill = FALSE, color = FALSE) +
+  scale_fill_manual(values = dis_col) +
+  scale_colour_manual(values = dis_col) + 
+  stat_compare_means(
+  aes(label=..p.adj..), 
+  comparisons = group.pairs, 
+  hide.ns = TRUE,
+  p.adjust.method = "BH",
+  tip.length = 0.05,
+  method = "wilcox.test"
+  )  + 
+  theme_minimal(base_size = 11) +
+  ylab("log10(Corynebacterium/Moraxella)") + 
+  theme(axis.text.x = element_text(angle=90),
+        #axis.ticks.x = element_blank(),
+        legend.position = "none") +
+  xlab("") 
+
+ratio_plot
+
+ggsave("04_DiversityAnalysis/alpha_beta/cmRatio.pdf", height = 4, width = 6)
+
+
+ggsave("msfigs/Supp Fig  cmRatio.pdf", height = 4, width = 6)
+```
+
+```{r}
+pn2 <- pn + theme(axis.text.x = element_blank(), legend.position = "none")  + labs(title = 'A') 
+ratio_plot1 <-  ratio_plot + theme(legend.position = "bottom",
+                                   legend.text = element_text(size=12),
+                                   legend.title = element_text(size=12) ) + guides(fill = guide_legend(ncol = 2)) + 
+  theme(axis.text.x = element_blank()) + labs(title = 'B') 
+
+#+ 
+ # scale_x_discrete(labels=c("acute_ili" = "Acute-ILI", "acute_ili_14_days" = "Acute-ILI 14 days",
+#                            "acute_ili_recovery" = "Acute-ILI recovery"))
+
+#pn2 | (ratio_plot1 / plot_spacer())
+pn2 | ratio_plot1# + plot_layout(widths = c(3,2))
+
+ggarrange(pn2, ratio_plot1, widths = c(1.2, 1), heights = c(1.3,1))
+
+ggsave("msfigs/Fig phyla cmRatio.pdf", height = 6, width = 12)
+```
+
+
+```{r}
+
+phyla_df <- taxa_summary(ps.main.2, "Phylum")
+phyla_df$Mean.Rel.Ab <- round(as.numeric(as.character(phyla_df$Mean.Rel.Ab)), 5)*100
+phyla_df$Std.dev <- as.numeric(as.character(phyla_df$Std.dev))
+
+phyla_df %>% arrange(desc(Mean.Rel.Ab))
+
+ps.main.2.rel <- microbiome::transform(ps.main.2, "compositional")
+phyla_df2 <- get_tax_table(ps.main.2.rel, "Phylum", "04_DiversityAnalysis/alpha_beta/")
+
+```
+
+
+## Heatmap  
+
+```{r message=FALSE, fig.height=6, fig.width=10}
+#grp.order.2 <- c('control','acute_ili','acute_ili_14_days','acute_ili_recovery')
+group.order <- c('control','acute_ili','acute_ili_14_days','acute_ili_recovery')
+heat.cols <- c("#f1faee", "#a8dadc","#457b9d","#1d3557")
+ps.main.rel.heat <- ps.main.2.rel
+tax_table(ps.main.rel.heat)[is.na(tax_table(ps.main.rel.heat)[,"Genus"]),"Genus"] <- ""
+p.het <- simple_heatmap(ps.main.rel.heat,
+                        group.facet = "condition_status",
+                        group.order = group.order,
+                        abund.thres = 0.00001,
+                        prev.thres = 0.75,
+                        level = "Genus",
+                        scale.color = "log10",
+                        na.fill = "white",
+                        color.fill = heat.cols,
+                        taxa.arrange=TRUE,
+                        remove.other=TRUE,
+                        panel.arrange="grid",
+                        ncol=NULL,
+                        nrow=NULL)
+
+p.het <- p.het + labs(fill = "Relative Abundance \n(log10)") + 
+  scale_fill_gradientn(colours = heat.cols, 
+        na.value = "white")
+p.het
+ggsave("04_DiversityAnalysis/alpha_beta/genus_heatmap.pdf", height = 4, width = 10)
+ggsave("04_DiversityAnalysis/alpha_beta/genus_heatmap.tiff", height = 4, width = 10)
+     
+```
+
+
+
+#### Supp figure  
+```{r}
+ggsave("msfigs/Supp figure genus_heatmap.pdf", height = 4, width = 10)
+```
+
+
+## Dominant taxa  
+
+```{r}
+
+ps.main.2.rel <- microbiome::transform(ps.main.2, "compositional")
+ps.main.gen.rel.2 <- tax_glom(ps.main.2.rel, "Genus")
+taxa_names(ps.main.gen.rel.2) <- tax_table(ps.main.gen.rel.2)[,"Genus"]
+
+otu <- otu_table(ps.main.gen.rel.2) # remove the transformation if using a merge_sample object
+tax <- tax_table(ps.main.gen.rel.2)
+j<-apply(otu,1,which.max)
+k <- j[!duplicated(j)]
+l <- data.frame(tax@.Data[k,]) # note the modification here and the line below
+m <- data.frame(otu@.Data[,k])
+#s <- as.name(")
+colnames(m) = l[,"Genus"]
+n <- colnames(m)[apply(m,1,which.max)]
+m[,"Genus"] <- n
+
+sample_data(ps.main.gen.rel.2)$dominant_taxa <- m$Genus
+
+meta(ps.main.gen.rel.2) %>% 
+  group_by(dominant_taxa) %>% tally() %>% 
+  mutate(rel.freq = round(100 * n/sum(n), 1),
+         rel.freq.pct = paste0(round(100 * n/sum(n), 0), "%")) %>% 
+  arrange(desc(n))
+
+```
+
+Dominant taxa by group 
+```{r}
+dominant_tax_grp <- meta(ps.main.gen.rel.2) %>% 
+  group_by(condition_status,dominant_taxa) %>% tally() %>% 
+  mutate(rel.freq = round(100 * n/sum(n), 1),
+         rel.freq.pct = paste0(round(100 * n/sum(n), 0), "%")) %>% 
+  arrange(desc(rel.freq))
+
+DT::datatable(dominant_tax_grp)
+```
+
+```{r fig.height=4, fig.width=6}
+
+dominant_tax_grp %>% 
+  mutate(taxa = ifelse(rel.freq < 1 , "Other", dominant_taxa)) %>% 
+ggplot(aes(condition_status,rel.freq)) +
+  geom_col(aes(fill=taxa), position = position_dodge()) +
+    scale_fill_brewer(palette = "Paired") + 
+  xlab("") + ylab("No. of samples \nGenus dominates") +
+  coord_flip()
+```
+
+
+```{r}
+sessionInfo()
+```
+

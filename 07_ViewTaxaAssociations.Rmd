@@ -1,0 +1,404 @@
+---
+title: "The nasopharyngeal microbiota of elderly subjects with and without influenza-like illness"
+subtitle: "Taxa association Plots"
+author: "Sudarshan A. Shetty"
+date: "`r date()`"
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 2
+    toc_float: true
+---
+
+# Association analysis  
+
+## Libraries
+
+```{r message=FALSE, warning=FALSE}
+library(microbiome)
+library(microbiomeutilities)
+library(phyloseq)
+library(coin)
+library(dplyr)
+library(readr)
+
+dis_col <- c(acute_ili="#6883ba", control = "#166f65", `NA`="black",
+             acute_ili_14_days = "#6d597a", control_14_days = "#87d2c9", 
+             acute_ili_recovery = "#e56b6f") 
+```
+
+## Import functions  
+```{r}
+#source("codes/functions.associations.R")
+#source("codes/transform_to_fractions.R")
+source("codes/biomestats.R") # all function for this specific analysis are stored here.
+source("codes/generalCodes.R")
+
+```
+
+```{r}
+dir.create("07_ViewTaxaAssociations")
+```
+
+Read data  
+
+```{r}
+ps.main.2.genus  <- readRDS("data/rds/ps.main.2.genus.rds")
+#ps.main.2.genus <- readRDS("data/rds/ps.main.2.genus.rds")
+#table(tax_table(ps.main.2.genus)[,"Genus"], useNA="always")
+
+ps.main.2.genus <- format_to_besthit(ps.main.2.genus)
+
+taxa_names(ps.main.2.genus)[3:15]
+
+taxa_names(ps.main.2.genus) <- gsub(" ", ".", taxa_names(ps.main.2.genus))
+taxa_names(ps.main.2.genus) <- gsub("\\[|\\]", "", taxa_names(ps.main.2.genus))
+taxa_names(ps.main.2.genus) <- gsub("-", ".", taxa_names(ps.main.2.genus))
+```
+
+## Control ILI  
+
+```{r}
+ctrl_ili_v1 <- c("control", "acute_ili")
+
+ps.ctrl.iliv1 <- subset_samples(ps.main.2.genus, 
+                                condition_status %in% ctrl_ili_v1)
+
+# clean taxonomy
+ps.ctrl.iliv1 <- prune_taxa(taxa_sums(ps.ctrl.iliv1) > 0, ps.ctrl.iliv1)
+```
+
+
+### Plot Control ILI  
+
+```{r eval=TRUE, message=FALSE}
+
+path.files <- "06_taxa_associations/ctrl_ili/"
+pattern.name <- "SELECTED.associations.between.ctrl_ili."
+test.ctrl.ili <- combine_tables(path.files,pattern.name)
+
+test.ctrl.ili <- test.ctrl.ili %>% 
+  mutate(variable = ifelse(variable=="Roken", "Smoking", variable))
+test.ctrl.ili$variable <- gsub("_2014","", test.ctrl.ili$variable)
+test.ctrl.ili <- test.ctrl.ili %>% 
+  mutate(variable = ifelse(variable=="alpa_beta_blockers", "Alpha-Beta Blockers", variable),
+         variable = ifelse(variable=="Antiepileptica", "Anti-Epileptics", variable),
+         variable = ifelse(variable=="arbs", "Angiotensin receptor blockers", variable),
+         variable = ifelse(variable=="autoimmune_disease", "Autoimmune disease", variable),
+         variable = ifelse(variable=="chronic_cvd", "Chronic CVD", variable),
+         variable = ifelse(variable=="comorbidities", "Co-morbidities", variable),
+         variable = ifelse(variable=="flu_shot_2015", "Flu vaccination 2015", variable),
+         variable = ifelse(variable=="number_of_medications", "No. of medications", variable),
+         variable = ifelse(variable=="other_malignancies", "Other malignancies", variable),
+         variable = ifelse(variable=="respiratory_disease", "Respiratory disease", variable),
+         variable = ifelse(variable=="statins", "Statins", variable),
+         variable = ifelse(variable=="Roken", "Smoking", variable))
+
+```
+
+
+
+```{r fig.width=9, fig.height=6}
+
+p <- plot_taxa_associations(tab=test.ctrl.ili, 
+                            ps=ps.ctrl.iliv1, 
+                            adj.pval=TRUE, 
+                            group="condition_status",
+                            cut.off = 0.05,
+                            p.widths = c(1,0.2)) 
+p <- p  
+p 
+ggsave("07_ViewTaxaAssociations/ctrl_ili_taxa_associations.pdf", h=6,w=8)
+```
+
+Four genera show assocations with ILI. 
+
+### Plot significant taxa  
+```{r message=FALSE, warning=FALSE,eval=TRUE, fig.height=4, fig.width=10}
+path.files <- "06_taxa_associations/ctrl_ili/"
+pattern.name <- "SELECTED.associations.between.ctrl_ili."
+all_test <- combine_tables(path.files,pattern.name)
+test_ili <- subset(all_test, variable == "ILI" & better.bound.FDR <= 0.05)
+
+p.ili <- plot_listed_taxa(ps.ctrl.iliv1, select.taxa = test_ili$taxa,
+                          group.order = c("control","acute_ili"),
+                          group = "condition_status",
+                          group.colors = dis_col) + 
+  ylab("Relative abundance (log10)") + 
+  scale_y_log10() +
+  theme(strip.text = element_text(face = "italic"),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank()) +
+  scale_x_discrete(labels=c("control" = "Control", "acute_ili" = "Acute-ILI")) 
+  
+p.ili 
+
+ggsave("07_ViewTaxaAssociations/ctrl_ili_taxa.pdf", h=3,w=6)
+```
+
+
+```{r}
+(p) / p.ili + plot_annotation(tag_levels = "A")
+ggsave("07_ViewTaxaAssociations/ctrl_ili_taxa_assoc_abund.pdf", h=10,w=12)
+
+```
+
+#### Figure 2
+```{r}
+
+p.ili.f <- p.ili + theme_minimal(base_size = 10) + theme(strip.text = element_text(face = "italic"),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank())
+
+p / p.ili.f + plot_annotation(tag_levels = "A")
+ggsave("msfigs/Figure 2 assocaition ctrl_ili_taxa_assoc_abund.pdf", h=6,w=8)
+```
+
+
+
+## Plot time  
+```{r}
+library(microbiome)
+ps.main.2.genus.ili <- subset_samples(ps.main.2.genus, 
+                                      condition_group != "control")
+ps.main.2.genus.ili <- microbiome::transform(ps.main.2.genus.ili, "clr")
+gen.df <- phy_to_ldf(ps.main.2.genus.ili, transform.counts = NULL)
+
+#head(gen.df)
+gen.df <- gen.df %>% 
+  filter(OTUID %in% test_ili$taxa)
+
+```
+
+```{r}
+
+p <- ggplot(data = gen.df, 
+            aes(x = condition_status, 
+                       y = Abundance), 
+                       fill = condition_status)  +
+  geom_line(aes(group = participant_id), 
+            size = 1, alpha = 0.2) + 
+  geom_point(aes_string(x = "condition_status", 
+                        fill = "condition_status"), 
+             position = position_jitter(width = 0.2), 
+             size = 1.5, alpha = 0.5, shape = 21) +
+  facet_wrap(~OTUID) + 
+  scale_fill_manual(values = dis_col)+
+  scale_color_manual(values = dis_col) +
+  theme_minimal(base_size = 10) +
+  #scale_y_log10() +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_text(angle=90),
+        strip.text = element_text(face = "italic"),
+        legend.position = "none") +
+  ylab("Abundance (clr)") +
+  scale_x_discrete(labels=c("acute_ili" = "Acute-ILI", "acute_ili_14_days" = "Acute-ILI 14 days",
+                            "acute_ili_recovery" = "Acute-ILI recovery"))
+p
+ggsave("07_ViewTaxaAssociations/ili_taxa_stages.pdf", h=4,w=6)
+
+ggsave("msfigs/Supp fig ili_taxa_stages.pdf", h=4,w=8)
+
+
+```
+
+
+## ILI -1 vs pathogens  
+
+```{r message=FALSE}
+path.files <- "06_taxa_associations/iliv1/"
+pattern.name <- "SELECTED.associations.between."
+test.ili <- combine_tables(path.files,pattern.name)
+
+```
+
+
+```{r}
+test.ili$Association <- ifelse(test.ili$sign == -1, "Negative", "Positive")
+test.ili <- test.ili %>% 
+    filter(better.bound.FDR <= 0.05)
+
+p.associations <- ggplot(test.ili, aes(variable, taxa)) +
+    geom_tile(aes(fill= Association),size=0.15) +
+    #geom_text(aes(label = sign), size=2, color="white") +
+    scale_fill_manual(values = c(Positive = "#457b9d", Negative = "#e63946" )) +
+    theme_minimal(base_size = 8) + 
+    theme(axis.text.x = element_text(angle=90, 
+                                     hjust=0.95,
+                                     vjust=0.2),
+          axis.text.y = element_text(face = "italic"),
+          axis.title = element_blank(),
+          legend.position = "top",
+          plot.caption = element_text(face = "italic", hjust = -1.0)) 
+
+
+p.associations
+```
+
+
+## Read paired pseq  
+```{r}
+
+ps.merge <- readRDS("data/rds/ps.merge.rds")
+
+ps.ili.paired <- prune_samples(sample_names(ps.main.2.genus) %in% sample_names(ps.merge), ps.main.2.genus)
+table(meta(ps.ili.paired)$condition_status)
+ps.ili.paired <- subset_samples(ps.ili.paired, 
+                                condition_group == "ili")
+
+ps.ili.paired <- prune_taxa(taxa_sums(ps.ili.paired) > 0, ps.ili.paired)
+
+
+```
+
+```{r}
+#scale_x_discrete(labels=c("1" = "Infection", "2" = "No-Infection")) +
+table(meta(ps.ili.paired)$haemophilus_2014_any)
+
+ps.ili.paired.clr <- microbiome::transform(ps.ili.paired, "clr")
+headf <- phy_to_ldf(ps.ili.paired.clr, NULL) %>% 
+  filter(OTUID == "ASV13:g__Haemophilus") %>% 
+  mutate(InfectedParticipant= ifelse(condition_status== "acute_ili" & haemophilus_2014_any ==1, participant_id, "No")) %>% 
+  mutate(HaemophilusInfected=ifelse(participant_id %in% InfectedParticipant, "Infection", "No-Infection"))
+
+plot.haemoph <- ggplot(headf, aes(HaemophilusInfected, Abundance)) + 
+  geom_boxplot(aes(fill=HaemophilusInfected)) +
+  geom_jitter(aes(fill=HaemophilusInfected), width = 0.2, shape=21) +
+  theme_minimal() +
+  scale_fill_manual(values = c("#168aad", "#b5e48c")) +
+  geom_line(aes(group = participant_id), 
+            size = 1, alpha = 0.2) +
+  ylab("Abundance (clr)") + xlab("Haemophilus infection (Acute-ILI)") +
+  facet_grid(~condition_status) +
+  theme_minimal() +
+  theme(legend.position = "none")
+plot.haemoph
+head(haemo.asv.df)
+ggsave("msfigs/Figure Haemophilus.pdf", height = 4, width = 6)
+```
+
+```{r}
+plot.haemoph <- ggplot(headf, aes(condition_status, Abundance)) + 
+  geom_boxplot(aes(fill=condition_status)) +
+  geom_jitter(aes(fill=condition_status), width = 0.2, shape=21) +
+  theme_minimal() +
+  scale_fill_manual(values = dis_col) +
+  geom_line(aes(group = participant_id), 
+            size = 1, alpha = 0.2) +
+  ylab("Abundance (clr)") + xlab("Haemophilus infection (Acute-ILI)") +
+  facet_grid(~HaemophilusInfected) +
+  theme_minimal() +
+  theme(legend.position = "none")
+plot.haemoph
+```
+
+
+## Streptococcus  
+```{r}
+#streptococcus_pneumoniae_2014
+# haemolytic_streptococcus_2014
+#staphylococcus_aureus_2014
+#scale_x_discrete(labels=c("1" = "Infection", "2" = "No-Infection")) +
+table(meta(ps.ili.paired)$staphylococcus_aureus_2014)
+
+ps.ili.paired.clr <- microbiome::transform(ps.ili.paired, "clr")
+headf <- phy_to_ldf(ps.ili.paired.clr, NULL) %>% 
+  filter(OTUID == "ASV13:g__Haemophilus") %>% 
+  mutate(InfectedParticipant= ifelse(condition_status== "acute_ili" & haemophilus_2014_any ==1, participant_id, "No")) %>% 
+  mutate(HaemophilusInfected=ifelse(participant_id %in% InfectedParticipant, "Infection", "no"))
+
+plot.haemoph <- ggplot(headf, aes(HaemophilusInfected, Abundance)) + 
+  geom_boxplot(aes(fill=HaemophilusInfected)) +
+  geom_jitter(aes(fill=HaemophilusInfected), width = 0.2, shape=21) +
+  theme_minimal() +
+  scale_fill_manual(values = c("#168aad", "#b5e48c")) +
+  geom_line(aes(group = participant_id), 
+            size = 1, alpha = 0.2) +
+  ylab("Abundance (clr)") + xlab("Haemophilus infection (Acute-ILI)") +
+  facet_grid(~condition_status) +
+  theme_minimal() +
+  theme(legend.position = "none")
+plot.haemoph
+head(haemo.asv.df)
+ggsave("msfigs/Figure Haemophilus.pdf", height = 4, width = 6)
+```
+
+
+```{r}
+
+
+ps.merge.clr <- microbiome::transform(ps.merge, "compositional")
+ps.merge.porphy <- subset_taxa(ps.merge.clr, Genus=="Porphyromonas")
+
+# ASV203      ASV134 
+# 0.102756892 0.192982456 
+ps.merge.clr <- microbiome::transform(ps.merge, "clr")
+ps.merge.porphy <- subset_taxa(ps.merge.clr, Genus=="Porphyromonas")
+
+porphy_asv <- phy_to_ldf(ps.merge.porphy, NULL) %>% 
+  select(participant_id, condition_status, 
+         condition_group, Abundance, OTUID, Genus, Genus.Species) %>% 
+  mutate(taxa = paste(OTUID, ":",Genus.Species))
+
+ggplot(porphy_asv, aes(participant_id, taxa)) +
+  geom_tile(aes(fill = Abundance)) +
+  facet_grid(~condition_status, scales = "free")
+
+porphy_asv
+```
+
+
+
+## ILI -2 vs pathogens at acute stage  
+
+```{r message=FALSE}
+path.files <- "06_taxa_associations/iliv2/"
+pattern.name <- "SELECTED.associations.between."
+test.ili <- combine_tables(path.files,pattern.name)
+test.ili$Association <- ifelse(test.ili$sign == -1, "Negative", "Positive")
+test.ili <- test.ili %>% 
+    filter(better.bound.FDR <= 0.05)
+
+p.associations <- ggplot(test.ili, aes(variable, taxa)) +
+    geom_tile(aes(fill= Association),size=0.15) +
+    #geom_text(aes(label = sign), size=2, color="white") +
+    scale_fill_manual(values = c(Positive = "#457b9d", Negative = "#e63946" )) +
+    theme_minimal(base_size = 8) + 
+    theme(axis.text.x = element_text(angle=90, 
+                                     hjust=0.95,
+                                     vjust=0.2),
+          axis.text.y = element_text(face = "italic"),
+          axis.title = element_blank(),
+          legend.position = "top",
+          plot.caption = element_text(face = "italic", hjust = -1.0)) 
+p.associations
+ggsave("msfigs/Supp fig iliv2_with_v1_pathogen.pdf", h=4, w=4)
+```
+
+
+
+```{r message=FALSE}
+path.files <- "06_taxa_associations/iliv3/"
+pattern.name <- "SELECTED.associations.between."
+test.ili <- combine_tables(path.files,pattern.name)
+test.ili$Association <- ifelse(test.ili$sign == -1, "Negative", "Positive")
+test.ili <- test.ili %>% 
+    filter(p.value <= 0.05)
+
+p.associations <- ggplot(test.ili, aes(variable, taxa)) +
+    geom_tile(aes(fill= Association),size=0.15) +
+    #geom_text(aes(label = sign), size=2, color="white") +
+    scale_fill_manual(values = c(Positive = "#457b9d", Negative = "#e63946" )) +
+    theme_minimal(base_size = 8) + 
+    theme(axis.text.x = element_text(angle=90, 
+                                     hjust=0.95,
+                                     vjust=0.2),
+          axis.text.y = element_text(face = "italic"),
+          axis.title = element_blank(),
+          legend.position = "top",
+          plot.caption = element_text(face = "italic", hjust = -1.0)) 
+p.associations
+ggsave("msfigs/Supp fig iliv3_with_v1_pathogen.pdf", h=4, w=4)
+```
+
+

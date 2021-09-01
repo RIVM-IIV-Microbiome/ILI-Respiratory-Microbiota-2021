@@ -1,0 +1,1726 @@
+---
+title: "The nasopharyngeal microbiota of elderly subjects with and without influenza-like illness"
+subtitle: "Decontaminate Microbiota Data"
+author: "Sudarshan A. Shetty"
+date: "`r date()`"
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 2
+    toc_float: true
+editor_options: 
+  chunk_output_type: console
+---
+
+This document deals with contaminants analysis.    
+
+# Initiate     
+
+## Load pkgs  
+```{r libraries, warning=FALSE, message=FALSE}
+library(readr)
+library(decontam)
+#BiocManager::install("DECIPHER")
+library(microbiome); 
+#packageVersion("microbiome")
+library(phyloseq)
+#packageVersion("phyloseq")
+library(dplyr)
+#packageVersion("dplyr")
+library(ggpubr)
+#packageVersion("ggpubr")
+library(patchwork)
+#packageVersion("patchwork")
+library(microbiomeutilities)
+library(pheatmap)
+library(factoextra)
+library(tidyr)
+library(DECIPHER)
+library(ape)
+library(phangorn)
+library(tibble)
+#remotes::install_github("mikemc/speedyseq")
+```
+
+## Directories  
+Create directory to store output from investigation of controls.   
+```{r dir, eval=TRUE}
+
+dir.create("controls")
+dir.create("controls/rds")
+dir.create("controls/figs")
+dir.create("controls/tabs")
+#dir.create("tabs")
+```
+
+## Color codes  
+Color codes for each condition.  
+```{r}
+dis_col <- c(acute_ili="#6883ba", 
+             control= "#166f65", 
+             `NA`="black",
+             acute_ili_14_days = "#6d597a", 
+             control_14_days = "#87d2c9", 
+             acute_ili_recovery = "#e56b6f",
+             ili="steelblue") 
+
+ctrl_cols <- c(negative_control= "#7400b8", positive_control= "#ee6c4d" , Sample= "#83c5be")
+```
+
+
+## Import data  
+
+```{r}
+
+ps.total <- readRDS("data/rds/ps.total.rds")
+
+# mislabelled zymo mocks
+ps.total <- prune_samples(!(sample_names(ps.total) %in% c( "075_078",
+                                                           "075_180",
+                                                           "075_181",
+                                                           "075_237",
+                                                           "075_278")), ps.total)
+ps.total <- prune_taxa(taxa_sums(ps.total) >0, ps.total)
+#   
+```
+
+```{r}
+print_ps(ps.total)
+
+```
+
+01] ntaxa = 10468
+02] nsamples = 1067
+03] nsamplesvariables = 172
+04] nranks = 7
+05] Min. number of reads = 101
+06] Max. number of reads = 86374
+07] Total number of reads = 27095780
+08] Average number of reads = 25394.36
+09] Median number of reads = 25097
+10] Sparsity = 0.98614530685565
+11] Number of singletons = 44
+12] % of taxa that are singletons 
+  (i.e. exactly one read detected across all samples) = 0.42  
+
+
+## Split pseq  
+We split the total phyloseq object into `technical controls` and ` samples`
+### Techincal controls  
+
+```{r}
+
+ps.tech <- subset_samples(ps.total, control %in% c("negative_control", "positive_control"))
+
+
+ps.tech <- prune_taxa(taxa_sums(ps.tech) > 0, ps.tech)
+
+```
+
+Techincal controls have:  
+01] ntaxa = 1235  
+02] nsamples = 123    
+03] nsamplesvariables = 172  
+04] nranks = 7  
+05] Min. number of reads = 108  
+06] Max. number of reads = 64780   
+07] Total number of reads = 2368959  
+08] Average number of reads = 19259.83  
+09] Median number of reads = 17070  
+10] Sparsity = 0.960751785655508  
+11] Number of singletons = 45  
+12] % of taxa that are singletons (i.e. exactly one read detected across all samples) = 3.64372469635628  
+
+```{r}
+ps.d <- subset_taxa(ps.total, Phylum == "Deinococcota")
+plot_taxa_heatmap(ps.d, transformation = "log10", subset.top = 50,
+                  VariableA = c("control","run_lib"),
+                  cluster_cols = FALSE, 
+                  filename="controls/figs/Deinococcota_heatmap.pdf",
+                       height = 10, width = 14)
+
+#ps.3
+```
+
+
+### Samples   
+```{r}
+
+# select only nasopharynx  
+ps.sam <- subset_samples(ps.total, source !="oropharynx")
+ps.sam <- subset_samples(ps.sam, is.na(control))
+```
+
+There are still some samples with technical replicates and samples part of a different study. These will be removed. 
+```{r}
+ps.naso <- prune_samples(!(sample_names(ps.sam) %in% c( "071_330",
+                                                         "071_331",
+                                                         "075_067",
+                                                         "071_165")), ps.sam)
+```
+
+
+Identify samples from the another study with same participants.   
+
+```{r}
+
+pst_freq <- dplyr::count(meta(ps.naso), participant_id) %>% 
+   filter(n >3)
+pst_freq
+sam_dat_mult <- meta(ps.naso) %>% 
+   filter(participant_id %in% pst_freq$participant_id) %>% 
+   dplyr::select(participant_id,visit_id,sample_type,condition_status, SampleID) %>% 
+  group_by(participant_id)
+sam_dat_mult
+```
+
+remove samples 
+```{r}
+ps.naso <- prune_samples(!(sample_names(ps.naso) %in% c( "071_166",
+                                                         "075_258",
+                                                         "066_131",
+                                                         "071_146",
+                                                        " 069_289",
+                                                        "071_197",
+                                                        "071_166",
+                                                        "075_258",
+                                                        "075_243")), ps.naso)
+
+ps.naso <- prune_taxa(taxa_sums(ps.naso)>0, ps.naso)
+```
+
+We compare nasopharynx microbiota of subject with respiratory disease to those without (reported) disease. 
+
+Now, `r ntaxa(ps.naso)` ASVs are present in `nsamples(ps.naso)` samples at this step. 
+More details:  
+The nasophrynx samples consists of:  
+01] ntaxa = 9752  
+02] nsamples = 789  
+03] nsamplesvariables = 172  
+04] nranks = 7  
+05] Min. number of reads = 101  
+06] Max. number of reads = 86374  
+07] Total number of reads = 22580943  
+08] Average number of reads = 28619.7  
+09] Median number of reads = 28317  
+10] Sparsity = 0.982703102857066  
+11] Number of singletons = 43  
+12] % of taxa that are singletons (i.e. exactly one read detected across all samples) = 0.440935192780968  
+
+
+### Make summary of phyloseq objects 
+
+```{r}
+
+ps.list <- c("ps.total" = ps.total, "ps.tech" = ps.tech, "ps.naso" = ps.naso)
+ps_df <- NULL
+for(i in ps.list) {
+  #print(i)
+  #print(names(ps.listi))
+  df <- data.frame(ntaxa = ntaxa(i), 
+                   nsample = nsamples(i),
+                   min.reads = min(sample_sums(i)),
+                   max.reads = max(sample_sums(i)),
+                   total.read = sum(sample_sums(i)),
+                   average.reads = round(sum(sample_sums(i))/nsamples(i), 2),
+                   singletons = length(taxa_sums(i)[taxa_sums(i) <= 1]),
+                   sparsity = length(which(abundances(i) == 0))/length(abundances(i)))
+  #df$pseq <- 
+  #print(df)
+  #rownames(df) <- names(ps.list$i)
+  ps_df <- rbind(ps_df, df)
+  
+}
+# add row names
+rownames(ps_df) <- names(ps.list)
+
+```
+
+
+# Check for contamination   
+
+The ASV profiles for control samples are stored seperatly. We import those data for investigation.   
+
+```{r control-ps, eval=TRUE}
+
+ps1.control <- prune_taxa(taxa_sums(ps.tech) > 0, ps.tech)
+
+table(meta(ps1.control)$control)
+table(meta(ps1.control)$control_source)
+```
+
+## Decription of controls  
+
+Controls
+`negative_control` = 45   
+`positive_control` = 78   
+                             
+Sources of control:  
+`Blank` = 32 (DNA extraction negative control)   
+`MC_ATCC` = 15 (gDNA positive control)          
+`PCR blank` = 13 (PCR negative control)                                        
+`UMCU` = 10 (gDNA positive control)         
+`ZymoMC` = 53 (Includes both gDNA and cells positive control)    
+
+The widely used Zymo mock was used in two ways for this study. Starting with gDNA and with Cells for DNA extraction.  
+
+*Pseudomonas aeruginosa*, *Escherichia coli*, *Salmonella enterica*, *Lactobacillus fermentum*, *Enterococcus faecalis*, *Staphylococcus aureus*, *Listeria monocytogenes*, *Bacillus subtilis*. 
+First just check for zymo  
+```{r}
+zymo.ps <- subset_samples(ps1.control, control_source == "ZymoMC")
+zymo.ps <- phyloseq::prune_taxa(taxa_sums(zymo.ps) > 0, zymo.ps)
+```
+
+`r ntaxa(zymo.ps) ` ! ASVs in zymo positive controls.   
+We have 607 ASVs in ZymoBiomics mock.
+
+```{r}
+p <- plot_taxa_heatmap(zymo.ps, 
+                       subset.top = 50, 
+                       transformation = "log10",
+                       VariableA = "control_source",
+                       cluster_cols = FALSE,
+                       filename="controls/figs/zymo_heatmap.pdf",
+                       height = 10, width = 14)
+```
+
+First look suggests while the community is consisting of expected taxa from Zymo, there are likely cross contamination from DNA of samples, contaminants from reagents (especially in the DNA extraction zymo samples). This clearly indicates the need to heavily decontaminate the data using combination of existing tools and based on rational information using literature.  
+
+
+
+249 taxa are remaining.  
+*Pseudomonas aeruginosa*, *Escherichia coli*, *Salmonella enterica*, *Lactobacillus fermentum*, *Enterococcus faecalis*, *Staphylococcus aureus*, *Listeria monocytogenes*, *Bacillus subtilis*. 
+```{r}
+#Staphylococcus aureus
+#Salmonella enterica
+#Bacillus subtilis
+#Pseudomonas aeruginosa
+#Escherichia coli
+#Lactobacillus fermentum
+#Listeria monocytogenes
+#Enterococcus faecalis
+top.zymo.asvs <- get_tibble(zymo.ps, slot = "tax_table", column_id = "ASVID") %>% 
+  filter(ASVID %in% top_taxa(zymo.ps, 10)) %>% 
+  dplyr::select(ASVID, Family, Genus)
+  
+top.zymo.asvs  
+ # true 8 genus 
+```
+
+All 8 are in top 10 with one `ASV58 Enterobacteriaceae` and `ASV1 Corynebacterium` 
+Merge at genus list using `phyloseq::tax_glom` with `NArm=FALSE` to deal with _Enterobactariaceae_ taxonomy.  
+
+```{r}
+zymo.ps.gen <- tax_glom(zymo.ps, "Genus", NArm = FALSE)
+```
+
+## Check for abundances  
+compare abundance of true vs contaminants 
+```{r}
+
+zymo.comm <- top.zymo.asvs$ASVID[-1]
+
+zymo.mock.df <- phy_to_ldf(zymo.ps, transform.counts = "compositional") 
+head(zymo.mock.df)
+
+zymo.mock.df <- zymo.mock.df %>% 
+  mutate(ZymoTaxa = ifelse(OTUID %in% zymo.comm, "Zymo Members", "Non-Zymo Members"))
+
+zymo.mock.df %>% 
+  ggplot(aes(Sample_Name,Abundance)) + 
+  geom_bar(aes(fill=ZymoTaxa), stat = "identity") +
+  theme(axis.text.x = element_text(angle = 90)) +
+  scale_fill_manual(values= c(`Zymo Members`= "#cf8061", `Non-Zymo Members` = "grey40"))
+
+ggsave("controls/figs/ZymoMembers_NonMembers.pdf", height = 3, width = 8)
+
+```
+
+Batches 66, 69, 71, 75 75 is problematic, zymo mocks failed here.  
+
+## check sample sequenced in batches  
+```{r}
+samples_runlibs <- as.data.frame(table(sample_data(ps.naso)$run_lib,
+                                       sample_data(ps.naso)$condition_status)) %>% 
+  reshape2::melt() 
+
+#
+colnames(samples_runlibs)[1:2] <- c("Seq.library", "Group")
+
+ggplot(samples_runlibs, aes(Group,value)) + 
+  geom_col(aes(fill=Seq.library), position = position_dodge(width = 0.7)) +
+  ylab("No. of Samples") +
+  theme(axis.text.x = element_text(angle = 90))
+
+ggsave("controls/figs/Seq.library_Group.pdf", height = 4, width = 6)
+
+```
+
+## Make a list of non-Zymo  
+
+```{r}
+non.zymo.asvs <- unique(subset(zymo.mock.df, ZymoTaxa == "Non-Zymo Members")$OTUID)
+```
+
+
+### Read dsitribution    
+
+```{r}
+plot_read_distribution(ps.naso, plot.type = "density",groups="condition_group") +
+  geom_vline(xintercept = 6000)
+ggsave("controls/figs/read_distribution_Group.pdf", height = 4, width = 6)
+
+```
+
+
+## First Decontam  
+
+Prep phyloseq  
+```{r}
+
+ps_cont <- merge_phyloseq(ps.naso, ps1.control)
+sample_data(ps_cont)$control <- ifelse(is.na(sample_data(ps_cont)$control), "sample", sample_data(ps_cont)$control)
+
+table(sample_data(ps_cont)$control)
+```
+
+`r ntaxa(ps_cont)` ASVs and `r nsamples(ps_cont)` 
+negative_control positive_control           sample 
+              45               73              789 
+### Library size  
+
+```{r merge-cntrl-samples, eval=TRUE}
+
+lib.size.df <- meta(ps_cont)
+lib.size.df$LibrarySize <- readcount(ps_cont)
+
+lib.size.df <- lib.size.df[order(lib.size.df$LibrarySize),]
+
+lib.size.df$Index <- seq(nrow(lib.size.df))
+ggplot(data=lib.size.df, aes(x=Index, y=LibrarySize, 
+                    color=control)) + 
+  geom_point(alpha=0.25) + facet_grid(~control) + theme_biome_utils()
+#DT::datatable(df)
+ggsave("controls/figs/library_size_comparision.pdf", height = 4, width = 6)
+
+```
+
+
+## Plot heatmap of all samples and controls 
+
+```{r}
+library(pheatmap)
+p.sams.ctrls <- plot_taxa_heatmap(ps_cont, 
+                                  subset.top = 50, 
+                                  transformation = "log10",
+                                  VariableA = "control",
+                                  cluster_cols = FALSE,
+                                  filename="controls/figs/blank_samples_heatmap.pdf",
+                                  height = 12, width = 14)
+```
+
+Among the top 50 are some ASVs that are prevlant and dominants in controls.  
+
+Some samples have library sizes in range of negative controls.  
+
+Just the blank `ps`  
+```{r}
+blnk.ps <- subset_samples(ps1.control, control_source == "Blank" | control_source == "PCR blank") 
+blnk.ps <- phyloseq::prune_taxa(taxa_sums(blnk.ps) > 0, blnk.ps)
+saveRDS(blnk.ps, "controls/blnk.ps.rds")
+```
+
+Which are the top ASVs in negative controls ?  
+```{r}
+
+top.neg.asvs <- get_tibble(blnk.ps, slot="tax_table", column_id = "ASV") %>% 
+  filter(ASV %in%top_taxa(blnk.ps, 25))
+DT::datatable(top.neg.asvs)
+
+```
+
+This further supports cross contamination from between samples and negative controls. `ASV1:Corynebacterium` `ASV2:Moraxella` `ASV4:Dolosigranulum` `ASV5:Staphylococcus` could well be present in samples as they are known taxa from upper respiratory tract.  
+
+```{r}
+p.h <- plot_taxa_heatmap(blnk.ps, 
+                         subset.top = 50, 
+                         transformation = "log10",
+                         VariableA = "control_source",
+                         cluster_cols = FALSE,
+                         filename="controls/figs/blank_heatmap.pdf",
+                         height = 10, width = 14)
+
+```
+
+The heatmap highlights a cluster of ASVs that are widely accepted as contaminants. *Ralstonia*, *Bradyrhizobium* *Mesorhizobium* *Comamonadaceae*  
+
+Make a list of ASVs in negative blanks 
+```{r}
+blnk.asvs <- taxa_names(blnk.ps)
+```
+
+```{r}
+blank_tax <- get_tibble(blnk.ps,
+                       slot="tax_table", 
+                       column_id = "ASV") %>% 
+  filter(ASV %in% top_taxa(blnk.ps, 50))
+
+DT::datatable(blank_tax)
+```
+
+
+### Make a list of ASVs   
+
+```{r}
+ps.pos <- subset_samples(ps_cont, control == "positive_control")
+ps.pos <- prune_taxa(taxa_sums(ps.pos)>0, ps.pos)
+
+ps.neg <- subset_samples(ps_cont, control == "negative_control")
+ps.neg <- prune_taxa(taxa_sums(ps.neg)>0, ps.neg)
+
+ps.sam <- subset_samples(ps_cont, control == "sample")
+ps.sam <- prune_taxa(taxa_sums(ps.sam)>0, ps.sam)
+
+
+neg.ub.asv <- Reduce(intersect, list(taxa_names(ps.pos),
+                                     taxa_names(ps.neg),taxa_names(ps.sam)))
+length(neg.ub.asv)
+```
+
+We have a total of `r length(neg.ub.asv)` ASVs in negative control that are also detected in positive controls and samples.
+
+## Decontam  
+
+```{r complete-decontam, eval=TRUE}
+
+#BiocManager::install("decontam")
+#library(decontam)
+sample_data(ps_cont)$is.neg <- sample_data(ps_cont)$control == "negative_control"
+contamdf.prev05 <- isContaminant(ps_cont, 
+                                 method="prevalence",
+                                 neg="is.neg", 
+                                 threshold=0.7)
+table(contamdf.prev05$contaminant)
+```
+
+`decontam` identifies `r length(which(contamdf.prev05$contaminant))` ASVs as contaminants.  
+FALSE  TRUE 
+ 9528   363 
+ 
+363 ASVs identified as contaminants. 
+Check for thier taxonomic identities.  
+
+### Compare with blank ASVs  
+```{r}
+decontam.1.asvs <- rownames(subset(contamdf.prev05, contaminant== TRUE))
+
+## All ASVs in decontam are in blnk.asvs
+length(intersect(decontam.1.asvs,blnk.asvs))
+length(blnk.asvs) - length(decontam.1.asvs) 
+```
+
+Still there are 575 ASVs in blank.asvs no identified by decontam `isContaminant`. 
+
+
+```{r}
+# check taxonomy
+contaminant.tax <- tax_table(ps_cont) %>% as("matrix") %>% as.data.frame()
+contaminant.tax$ASVID <- rownames(contaminant.tax)
+contamdf.prev05.taxid <- contamdf.prev05 
+contamdf.prev05.taxid$ASVID <- rownames(contamdf.prev05.taxid)
+contamdf.prev05.taxid <- contamdf.prev05.taxid %>% left_join(contaminant.tax)
+contamdf.prev05.taxid <- subset(contamdf.prev05.taxid,contaminant == TRUE )
+#contamdf.prev05.taxid <- subset(contamdf.prev05.taxid,genus == "Ralstonia")
+DT::datatable(contamdf.prev05.taxid)
+
+```
+
+### Prevalence Negative Controls n True Samples   
+
+Now check for presence absence in controls and true samples.   
+```{r}
+df_t <- subset(contamdf.prev05,contaminant == TRUE )
+df_t$ASV <- rownames(df_t)
+# Make phyloseq object of presence-absence in negative controls and true samples
+ps.pa <- transform_sample_counts(ps_cont, function(abund) 1*(abund>0))
+ps.pa.neg <- prune_samples(sample_data(ps.pa)$control == "negative_control", ps.pa)
+
+ps.pa.pos <- prune_samples((sample_data(ps.pa)$control=="sample"), ps.pa)
+# Make data.frame of prevalence in positive and negative samples
+
+df.pa <- data.frame(pa.pos=taxa_sums(ps.pa.pos), 
+                    pa.neg=taxa_sums(ps.pa.neg),
+                    contaminant=contamdf.prev05$contaminant) 
+
+```
+
+
+### Plot prevalence  
+
+```{r}
+connt.tax <- tax_table(ps_cont) %>% as("matrix") %>% as.data.frame()
+connt.tax$ASVID <- rownames(connt.tax)
+df.pa$ASVID <- rownames(df.pa)
+df.pa <- df.pa %>% 
+  left_join(connt.tax)
+
+ggplot(data=df.pa, aes(x=pa.neg, 
+                       y=pa.pos, 
+                       color=contaminant)) + 
+  geom_point() +
+  xlab("Prevalence (Negative Controls)") + 
+  ylab("Prevalence (True Samples)") +
+  ggrepel::geom_label_repel(data=subset(df.pa,pa.neg >=15),
+             aes(x=pa.neg, y=pa.pos,label=Genus))
+ggsave("controls/figs/prevalence_neg_true_samples.pdf", height = 4, width = 6)
+```
+
+```{r}
+sum(sample_sums(ps.sam))
+```
+
+### isNot option  
+
+Our samples are mostly low biomass. In this case a stricter option is to use `decontam::isNotContaminant`. Asking the innocent to prove thier innocence, instead of proving the accused as guilty.  
+```{r}
+notcontamdf.prev05 <- isNotContaminant(ps_cont, 
+                                       method="prevalence",
+                                       neg="is.neg", 
+                                       threshold=0.5,
+                                       detailed = TRUE)
+table(notcontamdf.prev05$not.contaminant)
+```
+
+### Compare with blank ASVs  
+```{r}
+length(blnk.asvs)
+length(non.zymo.asvs)
+length(intersect(blnk.asvs,non.zymo.asvs))
+length(union(blnk.asvs,non.zymo.asvs))
+
+decontam.2.asvs <- rownames(subset(notcontamdf.prev05, not.contaminant== FALSE))
+
+## All ASVs in decontam are in blnk.asvs
+length(intersect(decontam.2.asvs,blnk.asvs))
+length(blnk.asvs) - length(decontam.2.asvs) 
+```
+
+ 
+`isNotContaminant` identifies 5784 ASVs as contaminants. These are many more than tose in blank asvs. 
+
+```{r}
+df_t2 <- subset(notcontamdf.prev05,not.contaminant == TRUE )
+df_t2$ASV <- rownames(df_t2)
+# Make phyloseq object of presence-absence in negative controls and true samples
+ps.pa <- transform_sample_counts(ps_cont, function(abund) 1*(abund>0))
+ps.pa.neg <- prune_samples(sample_data(ps.pa)$control == "negative_control", ps.pa)
+
+ps.pa.pos <- prune_samples((sample_data(ps.pa)$control=="sample"), ps.pa)
+# Make data.frame of prevalence in positive and negative samples
+
+df.pa <- data.frame(pa.pos=taxa_sums(ps.pa.pos), 
+                    pa.neg=taxa_sums(ps.pa.neg),
+                    not.contaminant=notcontamdf.prev05$not.contaminant)
+```
+
+### Plot prevalence  
+
+```{r}
+connt.tax <- tax_table(ps_cont) %>% as("matrix") %>% as.data.frame()
+connt.tax$ASVID <- rownames(connt.tax)
+df.pa$ASVID <- rownames(df.pa)
+df.pa <- df.pa %>% 
+  left_join(connt.tax)
+
+ggplot(data=df.pa, aes(x=pa.neg, 
+                       y=pa.pos, 
+                       color=not.contaminant)) + 
+  geom_point() +
+  xlab("Prevalence (Negative Controls)") + 
+  ylab("Prevalence (True Samples)") +
+  ggrepel::geom_label_repel(data=subset(df.pa,pa.neg >=15),
+             aes(x=pa.neg, y=pa.pos,label=Genus))
+ggsave("controls/figs/prevalence_neg_true_samples_NOT.pdf", height = 4, width = 6)
+```
+
+
+## Remove contaminants  
+
+```{r}
+
+ps.decontam <- prune_taxa(notcontamdf.prev05$not.contaminant, ps_cont)
+ps.decontam
+
+# remove control samples
+ps.decontam <- prune_samples(!(sample_names(ps.decontam) %in% sample_names(ps1.control)), ps.decontam)
+
+ps.decontam <- prune_taxa(taxa_sums(ps.decontam) >0, ps.decontam)
+ps.decontam
+```
+
+4104 ASVs   
+
+**percent of reads removed after decontam**  
+```{r}
+(sum(sample_sums(ps.sam)) - sum(sample_sums(ps.decontam)))/sum(sample_sums(ps.sam)) *100
+```
+
+4.8% percent reads removed after `decontam` step.  
+
+After removing contaminants and ASVs in only controls, `r ntaxa(ps.decontam)` ASVs are present in `nsamples(ps.decontam)` samples. 
+
+## heatamp after first decontam  
+
+Merge the decontaminated phyloseq with the control phyloseq and view top 50 ASVs.
+
+```{r}
+ps.1 <- merge_phyloseq(ps.decontam, ps1.control)
+p.decontam.1 <- plot_taxa_heatmap(ps.1, 
+                                  subset.top = 50, 
+                                  transformation = "log10",
+                                  VariableA = "control",
+                                  cluster_cols = FALSE,
+                                  filename="controls/figs/decontam_first_heatmap.pdf",
+                                  height = 10, width = 14)
+
+```
+
+We notice that even after strict cut-off for `decontam` dominant and prevalant contaminants are still present.  
+
+## Additional filtering:  
+https://www.nature.com/articles/s41467-018-02900-1#Sec22
+"Center on the controls in order to identify taxa that should be removed; if a taxon has a negative value after centering it’s more abundant in the control than it is in the sample and should be removed."
+
+```{r}
+
+technical <- subset_samples(ps_cont, control =="negative_control") 
+tech.means <- colMeans(otu_table(technical))
+samples <- subset_samples(ps_cont, control == "sample") 
+otus <- otu_table(samples) 
+centered <- scale(otus, center = tech.means, scale = FALSE) 
+otu_table(samples) <- otu_table(centered, taxa_are_rows = FALSE) 
+samples   
+        
+#subset on taxa that are present > 0
+G0 <- prune_taxa(taxa_sums(samples) > 0, samples) 
+G0 <- prune_samples(sample_sums(G0) > 0, G0) 
+G0 #9383 taxa and 746 samples
+
+#subset on taxa that are present < 0
+L0 <- prune_taxa(taxa_sums(samples) < 0, samples) 
+L0 <- prune_samples(sample_sums(L0) > 0, L0) 
+L0 #460 taxa and  106 samples
+```
+
+get rid of taxa `r ntaxa(L0)` in `r nsamples(L0)` in L0 from the dataset by subsetting on those in G0.  
+
+```{r}
+
+names <- taxa_names(G0)
+
+ps.decontam <- prune_taxa(names, ps.decontam)
+
+```
+4046 ASVs  
+`r ntaxa(ps.decontam)` in `r nsamples(ps.decontam)`   
+**percent of reads removed after second step decontam**  
+```{r}
+(sum(sample_sums(ps.sam)) - sum(sample_sums(ps.decontam)))/sum(sample_sums(ps.sam)) *100
+```
+
+8.38% of the reads are removed. 
+
+## heatamp after second decontamination step  
+
+Merge the decontaminated phyloseq with the control phyloseq and view top 50 ASVs.
+
+```{r}
+ps.2 <- merge_phyloseq(ps.decontam, ps1.control)
+p.decontam.2 <- plot_taxa_heatmap(ps.2, 
+                                  subset.top = 50, 
+                                  transformation = "log10",
+                                  VariableA = "control",
+                                  cluster_cols = FALSE,
+                                  filename="controls/figs/decontam_second_heatmap.pdf",
+                                  height = 10, width = 14)
+
+```
+
+We now have removed 100s of ASVs but still the number of `r ntaxa(ps.decontam)` ASVs seems high, even if we consider the nasophyrynx to be a diverse niche compared to let's say the gut.  
+Looking at the heatmap, there are stil ASVs with high abundance/prevalance in controls.  
+Phyllobacterium, ASV6:g__Rhodococcus, ASV9:o__Burkholderiales, ASV8:f__Comamonadaceae, ASV7:g__Burkholderia−Caballeronia−Paraburkholderia, ASV28:g__Bradyrhizobium, ASV32:f__Comamonadaceae, ASV40:f__Comamonadaceae
+
+## Taxonomic and rational inquiry  
+Now need to check for rationally reducing this number of ASVs, which may not necessarily be of *true sample origin*.  
+Here, taxonomic identities can be useful.  
+
+```{r}
+# check phyala 
+
+phy_df <- as.data.frame(table(tax_table(ps.decontam)[,"Phylum"])) %>% 
+  arrange(desc(Freq))
+phy_df
+```
+
+We have `Cyanobacteria`, `Chloroflexi` which we will remove, but first check their mean relative abundance.  
+
+### Mean abundance (phyla)  
+```{r}
+grp_abund <- get_group_abundances(ps.decontam, 
+                                  level = "Phylum", 
+                                  group="condition_group",
+                                  transform = "compositional")
+
+```
+
+
+```{r fig.height=8, fig.width=6}
+
+# clean names 
+grp_abund$OTUID <- gsub("p__", "",grp_abund$OTUID)
+grp_abund$OTUID <- ifelse(grp_abund$OTUID == "", 
+                          "Unclassified", grp_abund$OTUID)
+
+
+mean.plot <- grp_abund %>% # input data
+  ggplot(aes(x= reorder(OTUID, mean_abundance), # reroder based on mean abundance
+             y= log(mean_abundance+1),
+             fill=condition_group)) + # x and y axis 
+  geom_bar(     stat = "identity", 
+                position=position_dodge()) + 
+  scale_fill_manual("Condition", values=dis_col) + # manually specify colors
+  theme_bw() + # add a widely used ggplot2 theme
+  ylab("Mean Relative Abundance") + # label y axis
+  xlab("Phylum") + # label x axis
+  coord_flip() # rotate plot 
+
+mean.plot
+```
+
+
+### Filter out 
+```{r}
+
+ps.decontam.1 <- subset_taxa(ps.decontam, Phylum !="Cyanobacteria")
+ps.decontam.1 <- subset_taxa(ps.decontam.1, Phylum !="Chloroflexi")
+ps.decontam.1 <- subset_taxa(ps.decontam.1, Family!="Mitochondria")
+
+ntaxa(ps.decontam)-ntaxa(ps.decontam.1)
+
+```
+
+474 ASVs removed.  
+
+`r ntaxa(ps.decontam)-ntaxa(ps.decontam.1)` ASVs related to *Cyanobacteria* and *Chloroflexi* were removed with this step.  
+
+**percent of reads removed after remova of chloros**  
+```{r}
+(sum(sample_sums(ps.sam)) - sum(sample_sums(ps.decontam.1)))/sum(sample_sums(ps.sam)) *100
+```
+
+10.74153 % of reads removed
+
+Save the decontaminated samples with more than 2000 reads.  
+```{r}
+ps.decontam.save <- prune_samples(sample_sums(ps.decontam.1) >=2000, ps.decontam.1)
+ps.decontam.save <- prune_taxa(taxa_sums(ps.decontam.save)>0, ps.decontam.save)
+saveRDS(ps.decontam.save, "data/rds/ps.decontam.save.rds") 
+```
+
+## Now check for removing prevalant contmainants  
+```{r}
+ps.decontam.2 <- ps.decontam.1
+```
+
+
+## Dominant ASVs  
+
+```{r}
+dom_Tx <- dominant_taxa(ps.decontam.2)
+dominant_tible <- get_tibble(ps.decontam.2, slot = "tax_table", column_id = "ASVID") %>% 
+  filter(ASVID %in% dom_Tx$dominant_overview$dominant_taxa) %>% 
+  left_join(dom_Tx$dominant_overview, by = c("ASVID"="dominant_taxa")) %>% 
+  dplyr::select(ASVID, Family,Genus,Genus.Species,rel.freq) %>% 
+  arrange(desc(rel.freq))
+# now check prevalnce 
+tax_prev <- prevalence(ps.decontam.2)[dominant_tible$ASVID] %>% 
+  as.data.frame() %>% rownames_to_column("ASVID") %>% 
+  as.tibble() 
+colnames(tax_prev)[2] <- "prevalence" 
+
+dominant_tible <- dominant_tible %>% 
+  left_join(tax_prev) %>% 
+  mutate(Taxa= paste0(ASVID, Genus))
+
+
+ggplot(dominant_tible, aes(rel.freq, prevalence)) +
+   ggrepel::geom_text_repel(aes(label=Taxa)) +
+  #geom_point(aes(color=Taxa)) +
+  xlab("No. of sample taxa is most abundant")
+ggsave("controls/figs/dominance_prevlance.pdf", height = 6, width = 10)
+```
+
+## Rare ASVs  
+
+Identify ASVs that are low i.e. are not detected 0.0001 in atleast 5 of the samples.  
+```{r}
+
+rare_asvs <- rare_members(microbiome::transform(ps.decontam.2, "compositional"), 
+                          detection = 0.0001, 
+                          prevalence = 5/nsamples(ps.decontam.2))
+length(rare_asvs)
+
+core_asvs <- core_members(microbiome::transform(ps.decontam.2, "compositional"), 
+                          detection = 0.0001, 
+                          prevalence = 5/nsamples(ps.decontam.2))
+length(core_asvs)
+
+```
+
+Number of rare ASVs `r length(rare_asvs)` and that of non-rare `r length(core_asvs)`. This means `r length(rare_asvs)/ntaxa(ps.decontam.1)*100` % of the ASVs are low abundance/prevalant in the total data!  
+
+### Calculate contribution of rare and non-rare taxa  
+
+```{r}
+# we plot contribution of these two to total abundances 
+
+sample_data(ps.decontam.2)$rare_abundance <- rare_abundance(microbiome::transform(ps.decontam.2,
+                                                                      "compositional"), 
+                                                            detection = 0.0001, 
+                                                            prevalence = 5/nsamples(ps.decontam.2))
+
+sample_data(ps.decontam.2)$core_abundance <- core_abundance(microbiome::transform(ps.decontam.2,
+                                                                      "compositional"), 
+                                                            detection = 0.0001, 
+                                                            prevalence =5/nsamples(ps.decontam.2))
+
+  
+rar_core_df <- meta(ps.decontam.2) %>% 
+  tibble::rownames_to_column("SampleID2") %>% 
+  dplyr::select(SampleID, core_abundance, rare_abundance, condition_status, condition_group) %>% 
+  reshape2::melt() 
+
+```
+
+### Plot rare contribution 
+
+```{r}
+library(magrittr)
+o <- rar_core_df %>% filter(variable == "core_abundance") %>% arrange(desc(value)) %>% extract2("SampleID")
+
+rar_core_plot <- rar_core_df %>% 
+  mutate(SampleID = factor(SampleID, o)) %>% 
+  ggplot(aes(SampleID, value)) +
+  geom_bar(aes(fill=variable), stat = "identity") + 
+  scale_fill_brewer(palette = "Set2") +
+  facet_grid(~condition_group, scales = "free")+
+  theme_biome_utils() + theme(axis.text.x = element_blank())
+rar_core_plot + labs(subtitle = paste0("detection = 0.0001 " , 
+                                       "prevalence = 5" ))
+
+ggsave("controls/figs/rar_core_plot.pdf", height = 6, width = 10)
+
+```
+
+
+In both control and ili group, there are samples where the rare ASVs contribute to more than 20% of the total abundance.  
+Which are these rare ASVs? 
+
+```{r}
+sms_rare_dom <- subset(rar_core_df, variable== "rare_abundance" & value >=0.20)$SampleID
+subset(rar_core_df, variable== "rare_abundance" & value >=0.20)
+```
+
+Which are the top rare ASVs in these samples  
+```{r fig.height=8, fig.width=12, eval=T}
+
+ps.rar.dom <- prune_samples(sms_rare_dom, ps.decontam.2)
+ps.rar.dom <- prune_taxa(taxa_sums(ps.rar.dom)>0,ps.rar.dom)
+#ps.rar.dom <- aggregate_rare(ps.rar.dom,"Genus")
+p.rare<-plot_taxa_heatmap(ps.rar.dom, 
+                          VariableA = "condition_group", 
+                          subset.top = 50,
+                          transformation = "log10",
+                          cluster_cols = FALSE,
+                          filename="controls/figs/rare_heatmap.pdf",
+                          height = 10, width = 14)
+
+```
+
+
+Most of these samples are dominate by "potential" sample origin taxa.  
+May not be the best to remove these samples or filter based on prevalance and abudnance threshold.
+
+Additionally, there are still ASVs that were enriched in negative controls. 
+
+```{r}
+# ASVs detected in blanks blnk.asvs
+# ASVs from blank detected in samples 
+ps.decontam.2.rel <- microbiome::transform(ps.decontam.2,"compositional")
+blnk.sample.asv <- prune_taxa(taxa_names(ps.decontam.2.rel) %in% blnk.asvs, ps.decontam.2.rel) 
+# remove very low abundance and prevalnce taxa 
+blnk.sample.asv <- core(blnk.sample.asv, 0.0001, 2/100) 
+
+```
+
+
+```{r}
+intersect(taxa_names(blnk.ps),taxa_names(ps.decontam.2.rel))
+```
+
+We `r length(intersect(taxa_names(blnk.ps),taxa_names(ps.decontam.2.rel)))` ASVs in samples that are also in blanks.   
+
+378 ASVs  
+
+## Co-occurance/Abundance clustering    
+
+The concept of Co-Abundance groups is particularly interesting to check. Main reason being, if a contaminant is from negative controls it should show positive correaltion with other contaminants. From Heatmaps above we see that most prevalent contaminants ASV7:g__Burkholderia−Caballeronia−Paraburkholderia, ASV8:f__Comamonadaceae, ASV9:o__Burkholderiales tend to cluster together. 
+
+We first calculate Spearman's correlation for only ASVs identified in blanks that are also present in samples. 
+```{r}
+
+#spearman_tree & CAG_heat_tree are the same but in different order
+spearman_matrix <- cor(t(abundances(blnk.sample.asv)), method = "spearman")
+spearman_tree <- hclust(dist(spearman_matrix), method = "ward.D")
+#plot(spearman_tree)
+
+
+library(factoextra)
+library(NMF)
+
+set.seed(85723)
+clust <- fviz_nbclust(as.data.frame(spearman_matrix), kmeans, nstart = 25,  
+             method = "gap_stat", nboot = 500) +
+  labs(subtitle = "Gap statistic method")
+ggsave("controls/figs/clusters.pdf")
+CAG_n9 <- factor(cutree(spearman_tree, k = 9))
+
+# Figure S1
+CAG_heatmap <- aheatmap(spearman_matrix, 
+                       color = "-Spectral:100", 
+                       scale = "none", 
+                       breaks = NA, 
+                       Rowv=T, 
+                       Colv=T, 
+                       width=30, 
+                       height=16, 
+                       cexRow=1, 
+                       hclustfun = "ward", 
+                       main = "OTU co-ocurrences",
+                       distfun = "euclidean", 
+                       annRow = CAG_n9,
+                       filename = "controls/figs/cag_contaminats.pdf")
+
+```
+
+## Check if these clusters make sense 
+
+```{r}
+# Validation of CAGs 
+# Randomly split the dataset, compute a correlation matrix and run a Mantel test
+subsample = sample(c(1:700), size = 500, replace = F)
+asv_doubt = abundances(blnk.sample.asv)
+
+train_data = asv_doubt[,subsample]
+test_data = asv_doubt[,-subsample]
+train_spearman = cor(t(train_data), method = "spearman")
+test_spearman = cor(t(test_data), method = "spearman")
+vegan::mantel(as.dist(train_spearman), as.dist(test_spearman), permutations=999)
+```
+
+r: 0.7941 and Significance: 0.001. Some level of confidence can be assigned to the clusters observed. Here, specifically, will look at ASVs in cluter with ASV7:Burkholderia-Caballeronia-Para.. and ASV8:Comamonadaceae, ASV9:Burkholderiales because these were highly prevalant and abundant in blanks. 
+## CAG based removal  
+```{r}
+
+CAG_n9 <- factor(cutree(spearman_tree, k = 9))
+```
+
+### Cluster 2  
+```{r}
+cag.2 <- asv_doubt[CAG_n9 == 2,]
+co_contam_2 <- rownames(cag.2)
+co_contam_2_tax <- get_tibble(ps.decontam.2,
+                       slot="tax_table", 
+                       column_id = "ASV") %>% 
+  filter(ASV %in% co_contam_2)
+knitr::kable(co_contam_2_tax)
+write.csv(co_contam_2_tax, "controls/tabs/cluster_2.csv")
+```
+
+```{r}
+dominant_cluster2 = apply(cag.2, MARGIN = 1, FUN = mean)
+sort(dominant_n5_f, decreasing = T)
+```
+
+### Cluster 4  
+```{r}
+CAG_n5_d <- asv_doubt[CAG_n9 == 4,]
+co_contam <- rownames(CAG_n5_d)
+co_contam_4tax <- get_tibble(ps.decontam.2,
+                       slot="tax_table", 
+                       column_id = "ASV") %>% 
+  filter(ASV %in% co_contam)
+knitr::kable(co_contam_4tax)
+write.csv(co_contam_4tax, "controls/tabs/cluster_4.csv")
+```
+
+23 ASVs  
+
+In addition, ASV54:Methylobacterium-Methylorubrum is also highly prevalent in the blanks. Check which cluster they belong to.   
+### Cluster 7  
+```{r}
+CAG_n5_7 = asv_doubt[CAG_n9 == 7,]
+co_contam_7 <- rownames(CAG_n5_7)
+co_contam_7tax <- get_tibble(ps.decontam.2,
+                       slot="tax_table", 
+                       column_id = "ASV") %>% 
+  filter(ASV %in% co_contam_7) 
+
+write.csv(co_contam_7tax, "controls/tabs/cluster_7.csv")
+table(co_contam_7tax$Genus, useNA = "always")
+```
+
+23 ASVs 
+
+`r length(co_contam_7)` are in cluster with ASV54:Methylobacterium-Methylorubrum
+
+These include majority *Methylobacterium-Methylorubrum*. Here, we make a choice to remove these potential contaminating ASVs. 
+### Cluster 5    
+```{r}
+CAG_n5_5 = asv_doubt[CAG_n9 == 5,]
+co_contam_5 <- rownames(CAG_n5_5)
+co_contam_5tax <- get_tibble(ps.decontam.2,
+                       slot="tax_table", 
+                       column_id = "ASV") %>% 
+  filter(ASV %in% co_contam_5)
+write.csv(co_contam_5tax, "controls/tabs/cluster_5.csv")
+
+table(co_contam_5tax$Genus, useNA = "always")
+```
+
+Actinomyces,Gemella, Granulicatella,Haemophilus,Rothia,Streptococcus,Veillonella
+
+### Cluster 6    
+```{r}
+CAG_n5_6 = asv_doubt[CAG_n9 == 6,]
+co_contam_6 <- rownames(CAG_n5_6)
+co_contam_6tax <- get_tibble(ps.decontam.2,
+                       slot="tax_table", 
+                       column_id = "ASV") %>% 
+  filter(ASV %in% co_contam_6)
+write.csv(co_contam_6tax, "controls/tabs/cluster_6.csv")
+
+table(co_contam_6tax$Genus, useNA = "always")
+```
+ 
+ 61 ASVs
+
+Cluster 6 predominantly consists of genera with evidence for presence in URT, Neisseria,  Streptococcus, Veillonella, Rothia, Prevotella, Porphyromonas, Haemophilus, Bifidobacterium, Fusobacterium, Corynebacterium
+ASV295
+
+The last two clusters contain mostly low abundant and most of the taxa that are known to be contaminants.  
+
+cluster 8 = 51 ASVs  
+cluster 9 = 44 ASVs  
+
+```{r}
+table(CAG_n9)
+
+CAG_n5_8 = asv_doubt[CAG_n9 == 8,]
+co_contam_8 <- rownames(CAG_n5_8)
+co_contam_8tax <- get_tibble(ps.decontam.2,
+                       slot="tax_table", 
+                       column_id = "ASV") %>% 
+  filter(ASV %in% co_contam_8)
+write.csv(co_contam_8tax, "controls/tabs/cluster_8.csv")
+table(co_contam_8tax$Genus, useNA = "always")
+length(co_contam_8)
+
+CAG_n5_9 = asv_doubt[CAG_n9 == 9,]
+co_contam_9 <- rownames(CAG_n5_9)
+co_contam_9tax <- get_tibble(ps.decontam.2,
+                       slot="tax_table", 
+                       column_id = "ASV") %>% 
+  filter(ASV %in% co_contam_9)
+write.csv(co_contam_9tax, "controls/tabs/cluster_9.csv")
+
+table(co_contam_9tax$Genus, useNA = "always")
+length(co_contam_9)
+```
+
+
+## Remove contaminats CAGs  
+We will not remove cluster 6, but cluster 4, 7, 8, 9
+
+```{r}
+
+ps.decontam.3 <- prune_taxa(!taxa_names(ps.decontam.2) %in% co_contam,
+                            ps.decontam.2) 
+ps.decontam.3 <- prune_taxa(!taxa_names(ps.decontam.3) %in% co_contam_7,
+                            ps.decontam.3) 
+ps.decontam.3 <- prune_taxa(!taxa_names(ps.decontam.3) %in% co_contam_8,
+                            ps.decontam.3) 
+ps.decontam.3 <- prune_taxa(!taxa_names(ps.decontam.3) %in% co_contam_9,
+                            ps.decontam.3) 
+
+core_tax <- get_tibble(ps.decontam.3,
+                       slot="tax_table", 
+                       column_id = "ASV") %>% 
+  filter(ASV %in% top_taxa(ps.decontam.3, 30))
+table(core_tax$Genus, useNA = "always")
+
+```
+
+
+**percent of reads removed after decontam**  
+```{r}
+(sum(sample_sums(ps.sam)) - sum(sample_sums(ps.decontam.3)))/sum(sample_sums(ps.sam)) *100
+```
+
+From starting we removed 19.8% of reads
+9752 ASVs to 3431 ASVs  
+
+The removal of these likely contaminants would result in lower number of reads in each sample. 
+
+```{r}
+
+#sort(sample_sums(ps.decontam.3))
+
+ps.decontam.3 <- prune_samples(sample_sums(ps.decontam.3) > 2000, ps.decontam.3)
+ps.decontam.3 <- prune_taxa(taxa_sums(ps.decontam.3) > 0, ps.decontam.3)
+#3457 taxa and 758 samples 
+#ps.merge.genus.rel <- microbiome::transform(tax_glom(ps.decontam.3,"Genus"), "compositional")
+#taxa_names(ps.merge.genus.rel) <- tax_table(ps.merge.genus.rel)[,"Genus"]
+#core_members(ps.merge.genus.rel, detection = 0.0001, prevalence = 0.75)
+saveRDS(ps.decontam.3,"data/rds/ps.decontam.3.rds")
+ps.decontam.3 <- readRDS("data/rds/ps.decontam.3.rds")
+```
+
+
+```{r}
+ps.3 <- merge_phyloseq(ps.decontam.3, ps1.control)
+p.decontam.3 <- plot_taxa_heatmap(ps.3, 
+                                  subset.top = 50, 
+                                  transformation = "log10",
+                                  VariableA = "control",
+                                  cluster_cols = FALSE,
+                                  filename="controls/figs/decontam_after_cag_heatmap.pdf",
+                                  height = 10, width = 14)
+
+```
+
+
+## Phylogenetic tree   
+
+### Alignment  
+```{r}
+
+seqs <- refseq(ps.decontam.3)
+#names(seqs) <- seqs # This propagates to the tip labels of the tree
+alignment <- AlignSeqs(DNAStringSet(seqs), anchor=NA)
+```
+
+### Build tree    
+```{r}
+phang.align <- phyDat(as(alignment, "matrix"), type="DNA")
+dm <- dist.ml(phang.align)
+treeNJ <- NJ(dm) # Note, tip order != sequence order
+fit <- pml(treeNJ, data=phang.align)
+
+## negative edges length changed to 0!
+
+fitGTR <- update(fit, k=4, inv=0.2)
+fitGTR <- optim.pml(fitGTR, model="GTR", 
+                    optInv=TRUE, optGamma=TRUE,
+                    rearrangement = "stochastic", 
+                    control = pml.control(trace = 0))
+saveRDS(fitGTR,"data/rds/fitGTR.rds")
+
+#ps <- merge_phyloseq(ps,phy_tree(fitGTR$tree))
+```
+
+
+```{r}
+ps.decontam.3a <- NULL
+#ps.decontam.3a <- ps.decontam.3 
+# add seqs as names to match tree tip labels
+#taxa_names(ps.decontam.3a) <-  refseq(ps.decontam.3)
+ps.decontam.3a <- merge_phyloseq(ps.decontam.3,phy_tree(fitGTR$tree))
+#phy_tree(ps.decontam.3a) <- phy_tree(fitGTR$tree)
+
+```
+
+
+## Save clean pseq  
+```{r}
+#ps.decontam.3a <- readRDS("data/rds/ps.clean.rds")
+#ps.decontam.3a <- microbiomeutilities::add_refseq(ps.decontam.3a)
+
+#ps.decontam.3a <- readRDS("data/rds/ps.clean.rds")
+
+saveRDS(ps.decontam.3a,"data/rds/ps.decontam.3a.rds")
+ps.decontam.3a <- readRDS("data/rds/ps.decontam.3a.rds")
+
+```
+
+## Investigate what we have left  
+```{r}
+get_taxa_unique(ps.decontam.3a, "Phylum")
+```
+
+There are 25 phyla
+```{r}
+comptab <- phy_to_ldf(ps.decontam.3a, transform.counts = NULL)
+#head(comptab)
+
+phylum_overview <- comptab %>% 
+  group_by(Phylum) %>% 
+  summarise(counts=sum(Abundance)) %>% 
+  ungroup %>% 
+  mutate(Percent = counts/sum(counts)*100) %>% 
+  arrange(desc(Percent))
+
+knitr::kable(phylum_overview)
+```
+
+## Identify rare phyla  
+
+We do this at phylum level, because an aggregated identity of rare phyla will cover rare ASVs. If done at ASV level, several rare ASVs from dominant phyla may be lost.  
+This is a trade-off that we make here.  
+
+Phyla that are not present atleast 0.1 times in 50% of the samples.  
+```{r}
+
+ps.decontam.3a.rel <- microbiome::transform(ps.decontam.3a, "compositional")
+
+prevlance_phy <- sort(prevalence(aggregate_taxa(ps.decontam.3a.rel, "Phylum")))
+totalcounts_phy <- sort(taxa_sums(aggregate_taxa(ps.decontam.3a, "Phylum")))
+
+phylum.ps <- aggregate_rare(ps.decontam.3a.rel, 
+                            detection = 0.001, 
+                            prevalence = 50/100, "Phylum")
+
+
+comptab <- phy_to_ldf(phylum.ps, transform.counts = NULL)
+#head(comptab)
+
+phylum_overview <- comptab %>% 
+  group_by(Phylum) %>% 
+  summarise(counts=sum(Abundance)) %>% 
+  ungroup %>% 
+  mutate(Percent = counts/sum(counts)*100) %>% 
+  arrange(desc(Percent))
+
+knitr::kable(phylum_overview)
+```
+
+
+Phyla that are not present atleast 0.1 times in 50% of the samples 
+
+```{r}
+
+ps.clean <- subset_taxa(ps.decontam.3a, Phylum %in% phylum_overview$Phylum)
+ps.clean
+
+```
+
+```{r}
+
+# How many reads were removed
+sum(sample_sums(ps.decontam.3a))  - sum(sample_sums(ps.clean))
+#125997
+```
+
+
+Percent remaining
+```{r}
+sum(sample_sums(ps.clean))/sum(sample_sums(ps.decontam.3a)) *100
+#99.3
+```
+
+
+We removed phyla 
+
+```{r}
+total_phyla <- get_taxa_unique(ps.decontam.3a, "Phylum")
+select.phyla <- get_taxa_unique(ps.clean, "Phylum")
+setdiff(total_phyla, select.phyla)
+```
+
+Phyla Kept:  
+"Actinobacteriota" "Proteobacteria"   "Firmicutes"       "Bacteroidota" 
+
+
+Phyla removed:  
+ "Fusobacteriota"    "Campilobacterota"  "Deinococcota"      "Synergistota"     
+ "Planctomycetota"   "Acidobacteriota"   "Desulfobacterota"  "Spirochaetota"    
+ "Verrucomicrobiota" "Crenarchaeota"     "Euryarchaeota"     "Bdellovibrionota" 
+ "Abditibacteriota"  "Halobacterota"     "Gemmatimonadota"   "Myxococcota"      
+ "Armatimonadota"    "Nitrospirota"      "Fibrobacterota"    "Dependentiae
+
+
+```{r}
+
+phy.tib <- aggregate_taxa(ps.decontam.3a, "Phylum") %>% 
+  phy_to_ldf(transform.counts = NULL) %>% 
+  group_by(Phylum) %>% 
+  summarise(counts=sum(Abundance)) %>% 
+  ungroup %>% 
+  mutate(Percent = counts/sum(counts)*100) %>% 
+  arrange(desc(Percent)) %>% 
+  mutate(Note = ifelse(Phylum %in% select.phyla, "Kept", "Discarded"))
+
+knitr::kable(phy.tib)
+
+```
+
+```{r}
+sort(sample_sums(ps.clean))[1:20]
+```
+
+### Fusobacteria  
+
+We see that overall Fusobacteriota has total 51169 reads contributing  0.28% to the total.
+Campilobacterota has total 35294 reads contributing 0.19% to the total. 
+
+Check which ASVs,genera are prevalent or abundant.  
+
+```{r}
+fusobacteriota.ps <- subset_taxa(ps.decontam.3a, Phylum == "Fusobacteriota")
+get_taxa_unique(fusobacteriota.ps, "Genus")
+sort(prevalence(fusobacteriota.ps))
+# We see that 
+tax_table(fusobacteriota.ps)[c("ASV397", "ASV160", "ASV238", "ASV331", "ASV47",  "ASV121",     "ASV33"),]
+
+tax_table(fusobacteriota.ps)[c("ASV397", "ASV160", "ASV238", "ASV331", "ASV47",  "ASV121",     "ASV33"), c("Family", "Genus", "Genus.Species")]
+```
+
+       Family             Genus           Genus.Species                
+ASV397 "Leptotrichiaceae" "Leptotrichia"  "Leptotrichia.wadei"         
+ASV160 "Leptotrichiaceae" "Leptotrichia"  NA                           
+ASV238 "Fusobacteriaceae" "Fusobacterium" "Fusobacterium.nucleatum"    
+ASV331 "Leptotrichiaceae" "Leptotrichia"  "Leptotrichia.hongkongensis" 
+ASV47  "Leptotrichiaceae" "Leptotrichia"  NA                           
+ASV121 "Fusobacteriaceae" "Fusobacterium" "Fusobacterium.periodonticum"
+ASV33  "Fusobacteriaceae" "Fusobacterium" NA      
+
+Websearch for these : 
+https://bacdive.dsmz.de/advsearch
+Advance search Genus and species epithet options.
+
+Leptotrichia.wadei
+BacDive: https://bacdive.dsmz.de/strain/17867
+Isolation: Human saliva,healthy person 
+
+Fusobacterium.nucleatum
+BacDive: https://bacdive.dsmz.de/strain/5765 
+Isolation: Oral cavity and airways 
+
+Leptotrichia.hongkongensis
+BacDive: https://bacdive.dsmz.de/strain/17868 
+Isolation: blood culture of a patient with metastatic breast carcinoma 
+
+Fusobacterium.periodonticum
+BacDive: https://bacdive.dsmz.de/strain/5771 
+Isolation: Human periodontitis 
+
+
+### Campilobacterota  
+```{r}
+campilobacterota.ps <- subset_taxa(ps.decontam.3a, Phylum == "Campilobacterota")
+get_taxa_unique(campilobacterota.ps, "Genus")
+sort(prevalence(campilobacterota.ps))
+tax_table(campilobacterota.ps)[c("ASV119", "ASV78"),]
+```
+
+ASV83 "Campylobacter.concisus"     Prev : 0.145118734  
+ASV53 "Campylobacter.ureolyticus"  Prev: 0.327176781
+
+Campylobacter.concisus
+BacDive: https://bacdive.dsmz.de/strain/2119  
+Isolation: human gingival ulcus 
+
+Campylobacter.ureolyticus
+BacDive: https://bacdive.dsmz.de/strain/2102  
+Isolation: amniotic fluid  
+
+### Deinococcota  
+```{r}
+deinococcota.ps <- subset_taxa(ps.decontam.3a, Phylum == "Deinococcota")
+get_taxa_unique(deinococcota.ps, "Genus")
+sort(prevalence(deinococcota.ps)) #ASV94      ASV111
+tax_table(deinococcota.ps)[c("ASV131", "ASV151"),c("Genus", "Genus.Species")]
+```
+
+ASV131 "Thermus" NA                     
+ASV151 "Thermus" "Thermus.thermophilus"  
+
+Importantly, Fusobacteriota 51169 reads which are 0.2825597 percent reads 
+Campilobacterota 35294 reads which are 0.1948966 percent reads.  
+
+Next investigated other potential phyla.  
+
+```{r}
+prevlance_phy <- as.data.frame(prevalence(aggregate_taxa(ps.decontam.3a, "Phylum")))
+totalcounts_phy <- as.data.frame(taxa_sums(aggregate_taxa(ps.decontam.3a, "Phylum")))
+
+prev_ab_phy <- cbind(totalcounts_phy,prevlance_phy)
+colnames(prev_ab_phy) <- c("Total Counts", "Prevalance")
+prev_ab_phy <- prev_ab_phy %>% 
+  rownames_to_column() %>%
+  arrange(desc(`Total Counts`))
+
+
+p1.ph <- prev_ab_phy %>% 
+  ggplot() + geom_point(aes(`Total Counts`, Prevalance)) +
+  ggrepel::geom_text_repel(aes(`Total Counts`, 
+                               Prevalance, 
+                               label=rowname), size=3) +
+  theme_bw() 
+
+p2.ph <- prev_ab_phy %>% 
+  ggplot() + geom_point(aes(`Total Counts`, Prevalance)) +
+  ggrepel::geom_label_repel(aes(`Total Counts`, 
+                               Prevalance, 
+                               label=rowname), size=3, alpha=0.5) +
+  theme_bw() + geom_vline(xintercept = 5000) +
+  #zoom
+  xlim(0,5000) + labs(subtitle = "X-axis limit to 5000 reads")
+
+p1.ph | p2.ph
+
+ggsave("controls/figs/phy_prev_counts.pdf", h=4, w=8)
+```
+
+
+### Acidobacteria  
+```{r}
+acidobacteriota.ps <- subset_taxa(ps.decontam.3a, Phylum == "Acidobacteriota")
+get_taxa_unique(acidobacteriota.ps, "Genus")
+sort(prevalence(acidobacteriota.ps)) #ASV798      ASV1430
+tax_table(acidobacteriota.ps)[c("ASV1430", "ASV798"),c("Genus", "Genus.Species")]
+```
+
+ASV1430 "Luteitalea" mown pasture grassland soil
+Luteitalea
+BacDive: https://bacdive.dsmz.de/strain/140275  
+Isolation: amniotic fluid  
+
+Vicinamibacter
+BacDive: https://bacdive.dsmz.de/strain/132582
+Isolation: sandy subtropical savannah soil from a riparian woodland
+
+
+It turns out that these are doubtful ASVs. 
+
+Based on these investigations, I will keep for sure Actinobacteriota, Proteobacteria, Firmicutes, Bacteroidota, Fusobacteriota and Campilobacterota.   
+We remove Deinococcota which is Genus Thermus dominated and prevelant.  
+Acidobacteriota which is genus Luteitalea and Vicinamibacter. While other Phyla hardly contribute much to the data and are low prevlant. 
+
+# Make filterd Phyloseq
+
+```{r}
+keep_phyla <- c("Actinobacteriota", "Firmicutes", "Proteobacteria",
+                "Bacteroidota", "Fusobacteriota", "Campilobacterota")
+ps.clean <- subset_taxa(ps.decontam.3a, Phylum %in% keep_phyla)
+ps.clean
+
+```
+
+
+
+```{r}
+
+# How many reads were removed
+sum(sample_sums(ps.decontam.3a))  - sum(sample_sums(ps.clean))
+#39534
+```
+
+
+Percent remaining
+```{r}
+sum(sample_sums(ps.clean))/sum(sample_sums(ps.decontam.3a)) *100
+#99.7
+```
+
+## Table of Phyla kept  
+
+```{r}
+
+
+prev_phy_all <- prevalence(aggregate_taxa(ps.decontam.3a, "Phylum")) %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Phylum")
+
+phy.tib <- aggregate_taxa(ps.decontam.3a, "Phylum") %>% 
+  phy_to_ldf(transform.counts = NULL) %>% 
+  group_by(Phylum) %>% 
+  summarise(counts=sum(Abundance)) %>% 
+  ungroup %>% 
+  mutate(Percent = counts/sum(counts)*100) %>% 
+  arrange(desc(Percent)) %>% 
+  left_join(prev_phy_all) %>% 
+  mutate(Note = ifelse(Phylum %in% keep_phyla, "Kept", "Discarded"))
+
+phy.tib
+write_csv(phy.tib, "controls/tabs/Phylum_Kept_Removed.csv")
+knitr::kable(phy.tib)
+```
+
+### Overview of all the fitlering steps  
+
+```{r}
+ps.list <- c("ps.total" = ps.total, 
+             "ps.tech" = ps.tech, 
+             "ps.naso" = ps.naso,
+             "ps.decontam" = ps.decontam,
+             "ps.decontam.1" = ps.decontam.1,
+             "ps.decontam.2" = ps.decontam.2,
+             "ps.decontam.3" = ps.decontam.3,
+             "ps.decontam.3a" = ps.decontam.3a,
+             "ps.clean" = ps.clean)
+ps_df <- NULL
+for(i in ps.list) {
+  #print(i)
+  #print(names(ps.listi))
+  df <- data.frame(ntaxa = ntaxa(i), 
+                   nsample = nsamples(i),
+                   min.reads = min(sample_sums(i)),
+                   max.reads = max(sample_sums(i)),
+                   total.read = sum(sample_sums(i)),
+                   average.reads = round(sum(sample_sums(i))/nsamples(i), 2),
+                   singletons = length(taxa_sums(i)[taxa_sums(i) <= 1]),
+                   sparsity = length(which(abundances(i) == 0))/length(abundances(i)))
+  #df$pseq <- 
+  #print(df)
+  #rownames(df) <- names(ps.list$i)
+  ps_df <- rbind(ps_df, df)
+  
+}
+# add row names
+rownames(ps_df) <- names(ps.list)
+write_csv(ps_df, "controls/tabs/All_Pseqs_Stats.csv")
+
+```
+
+
+
+```{r eval=FALSE}
+ps.clean <- readRDS("data/rds/ps.clean.rds")
+```
+
+#### Check taxonomies   
+
+Family names ending with `ceae`.  
+```{r}
+
+fam.names <- get_taxa_unique(ps.clean, "Family")
+
+fam.names[which(!grepl("ceae$",fam.names))]
+
+```
+
+Check individual names in SILVA taxonomy  
+
+uncultured Bacteroidales bacterium
+
+Convert Genus from NA to Family names which is given as genus name
+Peptoniphilus, Finegoldia, Anaerococcus, Fenollaria, Parvimonas, Ezakiella, Fastidiosipila, Murdochiella,Gallicola, [Eubacterium] coprostanoligenes group, Helcococcus, Ruminiclostridium, Tissierella, Lutispora
+
+```{r}
+chnage.genus <- c("Peptoniphilus", "Finegoldia", "Anaerococcus", "Fenollaria", "Parvimonas", "Ezakiella", "Fastidiosipila", "Murdochiella","Gallicola","[Eubacterium] coprostanoligenes group", "Helcococcus", "Ruminiclostridium", "Tissierella", "Lutispora")
+tax_tib <- get_tibble(ps.clean, slot="tax_table", "ASVID")
+
+tax_tib <- tax_tib %>% 
+  mutate(Genus = ifelse(Family %in% chnage.genus, Family, Genus))
+#unique(tax_tib$Genus)
+
+tax_tib <- as.data.frame(tax_tib) %>% column_to_rownames("ASVID") %>% 
+  as.matrix()
+tax_table(ps.clean) <- tax_table(tax_tib)
+
+```
+
+
+```{r}
+
+ubi.blnk <- prevalence(blnk.ps)
+
+cleaned.asvs <- taxa_names(ps.clean)
+blnk.asvs <- taxa_names(blnk.ps)
+length(blnk.asvs) 
+length(cleaned.asvs) 
+stil.left.asvs <- tax_table(ps.clean)[which(cleaned.asvs %in% blnk.asvs)] %>% as.matrix.data.frame()
+```
+
+938 blank ASVs 3152 sample ASVs
+232 of the blank are still in samples. 
+
+```{r}
+232/3152*100 
+#7.36
+
+prevlance_sams <- prevalence(prune_taxa(blnk.asvs, ps.clean)) %>% 
+  as.data.frame() 
+prevlance_negs <- prevalence(prune_taxa(cleaned.asvs, blnk.ps)) %>% 
+  as.data.frame() 
+colnames(prevlance_sams) <- "Prev Samples"
+colnames(prevlance_negs) <- "Prev Negatives"
+prevlance_sams <- prevlance_sams %>% rownames_to_column("ASV")
+prevlance_negs <- prevlance_negs %>% rownames_to_column("ASV")
+
+prevlance_sams_negs <- prevlance_sams %>% left_join(prevlance_negs)
+tx_tib <- get_tibble(ps.clean, slot = "tax_table", "ASV") %>% 
+  left_join(prevlance_sams_negs) %>% 
+  filter(`Prev Negatives` > 0.5 & `Prev Samples` > 0.5) %>% 
+  mutate(ASV.Genus= paste0(ASV,":", Genus))
+
+ggplot(prevlance_sams_negs, 
+       aes(`Prev Samples`, `Prev Negatives`)) +
+  geom_point(shape=21, size=2) +
+  ggrepel::geom_text_repel(data = tx_tib, aes(`Prev Samples`, `Prev Negatives`, label=ASV.Genus)) +
+  theme_biome_utils()
+ggsave("controls/figs/final_neg_sam_prevs.pdf", h=5, w=6)
+```
+
+Distribution of dominant ASVs
+
+```{r}
+
+blnk.ps.clr <- microbiome::transform(blnk.ps, "clr")
+ps.clean.clr <- microbiome::transform(ps.clean, "clr")
+
+p1 <- plot_density(blnk.ps.clr, "ASV1", log10 = F) + ggtitle("ASV1:Corynebacterium") + ylab("Negative samples")  | 
+plot_density(ps.clean.clr, "ASV1", log10 = F) + ggtitle("ASV1:Corynebacterium") + ylab("Nasophrynx samples")
+
+p2 <- plot_density(blnk.ps.clr, "ASV2", log10 = F) + ggtitle("ASV2:Moraxella") + ylab("Negative samples")  | 
+plot_density(ps.clean.clr, "ASV2", log10 = F) + ggtitle("ASV2:Moraxella") + ylab("Nasophrynx samples")
+
+p3 <- plot_density(blnk.ps.clr, "ASV3", log10 = F) + ggtitle("ASV3:Corynebacterium") + ylab("Negative samples")  | 
+plot_density(ps.clean.clr, "ASV3", log10 = F) + ggtitle("ASV3:Corynebacterium") + ylab("Nasophrynx samples")
+
+p4 <- plot_density(blnk.ps.clr, "ASV4", log10 = F) + ggtitle("ASV4:Dolosigranulum") + ylab("Negative samples")  | 
+plot_density(ps.clean.clr, "ASV4", log10 = F) + ggtitle("ASV4:Dolosigranulum") + ylab("Nasophrynx samples")
+
+p5 <- plot_density(blnk.ps.clr, "ASV5", log10 = F) + ggtitle("ASV5:Staphylococcus") + ylab("Negative samples")  | 
+plot_density(ps.clean.clr, "ASV5", log10 = F) + ggtitle("ASV5:Staphylococcus") + ylab("Nasophrynx samples")
+
+p1 / p2/p3/p4/p5 &theme_bw(base_size = 8)
+ggsave("controls/figs/ASV1.pdf", h=6, w=6)
+
+
+```
+
+
+## Save clean pseq
+```{r}
+saveRDS(ps.clean,"data/rds/ps.clean.rds")
+```
+
+
+```{r}
+sessionInfo()
+```
+
+
+
