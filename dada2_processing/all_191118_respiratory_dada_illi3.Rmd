@@ -1,0 +1,317 @@
+---
+title: "Respiratory microbiota ILI3"
+author: "Sudarshan A. Shetty"
+date: "`r date()`"
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 2
+    toc_float: true
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r}
+library(dada2)
+```
+
+
+```{r path}
+
+path <- "all_191118/" # CHANGE ME to the directory containing the fastq files after unzipping.
+
+# CHECK: Beware of the backslash (in windows it's \ -> change to /)
+list.files(path)
+```
+
+
+```{r}
+# With these lines of code we can remove the unnecessary bits in the names
+fnFs <- sort(list.files(path, pattern="_R1_001.fastq.gz", full.names = TRUE))
+fnRs <- sort(list.files(path, pattern="_R2_001.fastq.gz", full.names = TRUE))
+
+# Extract sample names, assuming filenames have format: SAMPLENAME_XXX.fastq
+sample.names <- sapply(strsplit(basename(fnFs), "_R"), `[`, 1)
+
+```
+
+```{r quality}
+
+# FW
+plotQualityProfile(fnFs [1:2])
+# To visualize average quality of all FWD reads you need to set aggregate= TRUE
+#200bp
+# Rev
+plotQualityProfile(fnRs [1:2])
+# To visualize average quality of all REV reads you need to set aggregate= TRUE
+#150bp
+```
+
+Assign the filenames for the filtered fastq.gz files.
+
+```{r filter and trim names}
+
+filt_path <- file.path(path, "filtered") # Place filtered files in filtered/ subdirectory
+filtFs <- file.path(filt_path, paste0(sample.names, "_F_filt.fastq.gz"))
+filtRs <- file.path(filt_path, paste0(sample.names, "_R_filt.fastq.gz"))
+```
+
+We'll use standard filtering parameters: 
+* maxN=0 (DADA2 requires no Ns)
+* truncQ=2
+* rm.phix=TRUE 
+* maxEE=2. The maxEE parameter sets the maximum number of "expected errors" allowed in a read, which is a better filter than simply averaging quality scores.
+
+The standard filtering parameters are starting points, not set in stone. For example, if too few reads are passing the filter, considering relaxing maxEE, perhaps especially on the reverse reads (eg. maxEE=c(2,5), this will allow 2 allowed errors in your fwd reads and 5 in your reverse). 
+
+If you want to speed up downstream computation, consider tightening maxEE. For paired-end reads consider the length of your amplicon when choosing truncLen as your reads must overlap after truncation in order to merge them later. 
+
+```{r filter}
+# Filter the forward and reverse reads
+out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs, 
+              truncLen=c(200,150), # depending on how your quality profiles look 
+              trimLeft = c(20,22), # if primers were not previously removed
+              maxN=0, 
+              maxEE=c(2,2), 
+              truncQ=2, 
+              rm.phix=TRUE, 
+              compress=TRUE, 
+              multithread=FALSE) # On Windows set multithread=FALSE
+# Check
+head(out)
+write.table(out,"all_191118/filter_trim_out.txt")
+```
+
+
+
+***
+Learn the Error Rates
+
+The DADA2 algorithm depends on a parametric error model (err) and every amplicon dataset has a different set of error rates. The learnErrors method learns the error model from the data, by alternating estimation of the error rates and inference of sample composition until they converge on a jointly consistent solution. As in many optimization problems, the algorithm must begin with an initial guess, for which the maximum possible error rates in this data are used (the error rates if only the most abundant sequence is correct and all the rest are errors).
+
+Parameter learning is computationally intensive, so by default the learnErrors function uses only a subset of the data (the first 1M reads). If the plotted error model does not look like a good fit, try increasing the nreads parameter to see if the fit improves. 
+
+```{r error rates}
+
+set.seed(100)
+# Learn forward error rates
+errF <- learnErrors(filtFs, nbases=5e8, multithread=TRUE, randomize=TRUE) #change nbases to include at least 20% of your samples
+# Learn reverse error rates
+errR <- learnErrors(filtRs, nbases=5e8, multithread=TRUE, randomize=TRUE)
+
+# It is always worthwhile, as a sanity check if nothing else, to visualize the estimated error rates:
+plotErrors(errR, nominalQ=TRUE) #change errF or errR to visualize the FWD and REV errors respectively
+
+# Check if the plotted error model looks like a good fit
+dada2:::checkConvergence(errF) #should reach 0
+dada2:::checkConvergence(errR) #should reach 0
+```
+
+The error rates for each possible transition (eg. A->C, A->G, .) are shown. Points are the observed error rates for each consensus quality score. The black line shows the estimated error rates after convergence. The red line shows the error rates expected under the nominal definition of the Q-value. The black line (the estimated rates) should (more or less) fit the observed rates well. The error rates will drop with increased quality as expected. If everything looks reasonable, we can proceed with confidence.
+
+***
+# Check if this part is necessary in the new version of the package
+#Dereplication
+
+Dereplication combines all identical sequencing reads into into "unique sequences" with a corresponding "abundance": the number of reads with that unique sequence. Dereplication substantially reduces computation time by eliminating redundant comparisons.
+
+Dereplication in the DADA2 pipeline has one crucial addition from other pipelines: DADA2 retains a summary of the quality information associated with each unique sequence. The consensus quality profile of a unique sequence is the average of the positional qualities from the dereplicated reads. These quality profiles inform the error model of the subsequent denoising step, significantly increasing DADA2's accuracy.
+
+```{r dereplicate}
+
+# Dereplicate the filtered fastq files
+derepFs <- derepFastq(filtFs, verbose=TRUE)
+derepRs <- derepFastq(filtRs, verbose=TRUE)
+
+# Name the derep-class objects by the sample names
+names(derepFs) <- sample.names
+names(derepRs) <- sample.names
+```
+
+
+***
+# Tutorial with the new package continues here.
+Sample Inference
+
+We are now ready to apply the core sequence-variant inference algorithm to the dereplicated data.
+
+```{r sample inference}
+
+# Infer the sequence variants in each sample
+dadaFs <- dada(derepFs, err=errF, multithread=FALSE, pool="pseudo") #check if with new package instead of derepFs we use filtFs
+dadaRs <- dada(derepRs, err=errR, multithread=FALSE, pool="pseudo")
+
+# Inspecting the dada-class object returned by dada:
+dadaFs[[1]]
+
+# The DADA2 algorithm inferred XXX real sequence variants from the XXX unique sequences in the first sample. There is much more to the dada-class return object than this (see help("dada-class") for some info), including multiple diagnostics about the quality of each inferred sequence variant.
+```
+
+
+***
+Merge paired reads
+
+Spurious sequence variants are further reduced by merging overlapping reads. The core function here is mergePairs, which depends on the forward and reverse reads being in matching order at the time they were dereplicated.
+
+```{r merge}
+
+# Merge the denoised forward and reverse reads:
+mergers <- mergePairs(dadaFs, derepFs, dadaRs, derepRs, verbose=TRUE) 
+
+# Inspect the merger data.frame from the first sample
+#head(mergers[[1]])
+```
+
+We now have a data.frame for each sample with the merged $sequence, its $abundance, and the indices of the merged $forward and $reverse denoised sequences. Paired reads that did not exactly overlap were removed by mergePairs.
+
+Most of your reads should successfully merge. If that is not the case upstream parameters may need to be revisited: Did you trim away the overlap between your reads? 
+
+
+***
+Construct sequence table
+
+```{r seq table}
+
+# We can now construct a sequence table of our samples, a higher-resolution version of the OTU table produced by traditional methods.
+seqtab <- makeSequenceTable(mergers)
+dim(seqtab) #Gives you the dimensions of your sequence table
+
+# Inspect distribution of sequence lengths
+table(nchar(getSequences(seqtab)))
+```
+
+The sequence table is a matrix with rows corresponding to (and named by) the samples, and columns corresponding to (and named by) the sequence variants. The lengths of our merged sequences should all fall within the expected range for the V4 amplicon (from 380 to 400bp).
+
+Sequences that are much longer or shorter than expected may be the result of non-specific priming, and may be worth removing. This is analogous to "cutting a band" in-silico to get amplicons of the targeted length. 
+
+```{r seq table trimmed}
+
+# OPTIONAL: we can trim away those sequences with unexpected sizes
+seqtab2 <- seqtab[,nchar(colnames(seqtab)) %in% c(210, 211, 212)] #depending on table
+
+# Check again
+table(nchar(getSequences(seqtab2)))
+```
+
+
+***
+Remove chimeras
+
+The core dada method removes substitution and indel errors, but chimeras remain. Fortunately, the accuracy of the sequences after denoising makes identifying chimeras simpler than it is when dealing with fuzzy OTUs: all sequences which can be exactly reconstructed as a bimera (two-parent chimera) from more abundant sequences.
+
+```{r chimeras}
+
+# Remove chimeric sequences:
+seqtab.nochim <- removeBimeraDenovo(seqtab2, method="consensus", multithread=FALSE, verbose=TRUE)
+
+dim(seqtab.nochim)
+sum(seqtab.nochim)/sum(seqtab) #This gives you the % of chimeras in your dataset
+saveRDS(seqtab.nochim, "all_191118/seqtab.nochim_all_191118.rds")
+# The fraction of chimeras varies based on factors including experimental procedures and sample complexity, but can be substantial. 
+```
+
+Most of your reads should remain after chimera removal (it is not uncommon for a majority of sequence variants to be removed though). If most of your reads were removed as chimeric, upstream processing may need to be revisited. In almost all cases this is caused by primer sequences with ambiguous nucleotides that were not removed prior to beginning the DADA2 pipeline. 
+
+
+***
+Track reads through the pipeline
+
+As a final check of our progress, we'll look at the number of reads that made it through each step in the pipeline:
+
+```{r track}
+
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, sapply(dadaFs, getN), sapply(mergers, getN), rowSums(seqtab2), rowSums(seqtab.nochim))
+
+colnames(track) <- c("input", "filtered", "denoised", "merged", "tabled", "nonchim")
+rownames(track) <- sample.names
+head(track)
+
+write.table(track, row.names = TRUE, col.names = NA, "all_191118/Tract table_all190524.txt", sep = "\t")
+```
+
+This is a great place to do a last sanity check. Outside of filtering (depending on how stringent you want to be) there should be no step in which a majority of reads are lost. 
+
+* If a majority of reads failed to merge, you may need to revisit the truncLen parameter used in the filtering step and make sure that the truncated reads span your amplicon. 
+* If a majority of reads failed to pass the chimera check, you may need to revisit the removal of primers, as the ambiguous nucleotides in unremoved primers interfere with chimera identification. 
+
+
+***
+Assign taxonomy
+
+Alternative to the original pipeline: 
+
+The recently developed IdTaxa taxonomic classification method is also available via the DECIPHER Bioconductor package. The paper introducing the IDTAXA algorithm reports classification performance that is better than the long-time standard set by the naive Bayesian classifier. Here we include a code block that allows you to use IdTaxa as a drop-in replacement for assignTaxonomy (and it’s faster as well!). Trained classifiers are available from http://DECIPHER.codes/Downloads.html. Download the SILVA SSU r132 (modified) file to follow along.
+
+
+```{r tax}
+#BiocManager::install("DECIPHER")
+library(DECIPHER); 
+packageVersion("DECIPHER")
+
+dna <- DNAStringSet(getSequences(seqtab.nochim)) # Create a DNAStringSet from the ASVs
+load("SILVA_SSU_r132_March2018.RData") # CHANGE TO THE PATH OF YOUR TRAINING SET
+ids <- IdTaxa(dna, trainingSet, strand="top", processors=NULL, verbose=FALSE) # use all processors
+ranks <- c("domain", "phylum", "class", "order", "family", "genus", "species") # ranks of interest
+# Convert the output object of class "Taxa" to a matrix analogous to the output from assignTaxonomy
+taxid <- t(sapply(ids, function(x) {
+        m <- match(ranks, x$rank)
+        taxa <- x$taxon[m]
+        taxa[startsWith(taxa, "unclassified_")] <- NA
+        taxa
+}))
+colnames(taxid) <- ranks; rownames(taxid) <- getSequences(seqtab.nochim)
+
+taxa <- taxid
+
+# Check
+taxa.print <- taxa # Removing sequence rownames for display only
+rownames(taxa.print) <- NULL
+head(taxa.print)
+```
+
+
+Few species assignments were made,  because it is often not possible to make unambiguous species assignments from segments of the 16S gene.
+
+
+***
+Make sure you save your created ASV and taxonomy tables:
+
+```{r save files}
+
+# ASV data
+write.table(seqtab.nochim, row.names = TRUE, col.names = NA, "all_191118/all_191118_sequences.txt", sep = "\t") 
+#change directory to where you want to store your data
+
+write.table(taxa, row.names = TRUE, col.names = NA, "all_191118/all_191118_taxonomy.txt", sep = "\t") 
+#change directory to where you want to store your data
+```
+
+
+***
+Evaluate accuracy
+One of the samples included here was a “mock community”, in which a mixture of 10 known strains (8 bacteria and 2 yeast) was sequenced. Reference sequences corresponding to these strains were provided in the downloaded zip archive. We return to that sample and compare the sequence variants inferred by DADA2 to the expected composition of the community.
+
+*NOT RUN BELOW THIS AS NOT SURE ABOUT MOCK SAMPLES*  
+Evaluating DADA2’s accuracy on the mock community:
+
+```{r mock community}
+
+unqs.mock <- seqtab.nochim["029-085",] # Change xxx with the name of your Mock community sample
+unqs.mock <- sort(unqs.mock[unqs.mock>0], decreasing=TRUE) # Drop ASVs absent in the Mock
+cat("DADA2 inferred", length(unqs.mock), "sample sequences present in the Mock community.\n")
+```
+
+DADA2 inferred xxx sample sequences present in the Mock community.
+
+```{r mock reference}
+
+mock.ref <- getSequences(file.path(path, "combined.fasta"))
+match.ref <- sum(sapply(names(unqs.mock), function(x) any(grepl(x, mock.ref))))
+cat("Of those,", sum(match.ref), "were exact matches to the expected reference sequences.\n")
+```
+
+Of those, xxx were exact matches to the expected reference sequences.
+
+This mock community contained 8 (10) bacterial strains. DADA2 identified 12 ASVs, and 9 of which exactly match the reference genomes of the expected community members. 
