@@ -7,12 +7,17 @@ Sudarshan A. Shetty<sup>1,2</sup>, Josine van Beek<sup>1</sup>, Elske Bijvank<su
 
 <sup>1</sup> Center for Infectious Disease Control, National Institute for Public Health and the Environment, The Netherlands.   
 <sup>2</sup> Department of Medical Microbiology and Infection prevention, Virology and Immunology research Group, University Medical Center Groningen, Groningen, Netherlands   
-<sup>*</sup> Corresponding author: Susana Fuentes; susana.fuentes[@]rivm[dot]nl   
+<sup>*</sup> Corresponding author: Susana Fuentes; susana.fuentes[@]rivm[dot]nl    
 
----  
+---   
+
 **For information related to codes and analysis:**   
   Sudarshan A. Shetty; sudarshan.shetty[@]rivm[dot]nl  
 
 **For information related to participants and related metadata:**    
   Debbie van Baarle; d.van.baarle[@]umcg[dot]nl  
-  Josine van Beek; josine.van.beek[@]rivm[dot]nl 
+  Josine van Beek; josine.van.beek[@]rivm[dot]nl   
+  
+  
+Note: Phyloseq object after `01_PrepPhyloseq` step is made available in `data/rds/ps.total.rds`. This can be used to redo analysis and create figures reported in manuscript from the step `02_DecontaminateMicrobiotaData` onwards.      
+
