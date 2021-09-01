@@ -89,20 +89,6 @@ print_ps(ps.total)
 
 ```
 
-01] ntaxa = 10468
-02] nsamples = 1067
-03] nsamplesvariables = 172
-04] nranks = 7
-05] Min. number of reads = 101
-06] Max. number of reads = 86374
-07] Total number of reads = 27095780
-08] Average number of reads = 25394.36
-09] Median number of reads = 25097
-10] Sparsity = 0.98614530685565
-11] Number of singletons = 44
-12] % of taxa that are singletons 
-  (i.e. exactly one read detected across all samples) = 0.42  
-
 
 ## Split pseq  
 We split the total phyloseq object into `technical controls` and ` samples`
@@ -137,7 +123,7 @@ plot_taxa_heatmap(ps.d, transformation = "log10", subset.top = 50,
                   VariableA = c("control","run_lib"),
                   cluster_cols = FALSE, 
                   filename="controls/figs/Deinococcota_heatmap.pdf",
-                       height = 10, width = 14)
+                  height = 10, width = 14)
 
 #ps.3
 ```
@@ -145,10 +131,8 @@ plot_taxa_heatmap(ps.d, transformation = "log10", subset.top = 50,
 
 ### Samples   
 ```{r}
-
-# select only nasopharynx  
-ps.sam <- subset_samples(ps.total, source !="oropharynx")
-ps.sam <- subset_samples(ps.sam, is.na(control))
+#ps.sam <- subset_samples(ps.total, source !="oropharynx")
+ps.sam <- subset_samples(ps.total, is.na(control))
 ```
 
 There are still some samples with technical replicates and samples part of a different study. These will be removed. 
@@ -970,7 +954,7 @@ intersect(taxa_names(blnk.ps),taxa_names(ps.decontam.2.rel))
 
 We `r length(intersect(taxa_names(blnk.ps),taxa_names(ps.decontam.2.rel)))` ASVs in samples that are also in blanks.   
 
-378 ASVs  
+377 ASVs  
 
 ## Co-occurance/Abundance clustering    
 
@@ -978,38 +962,48 @@ The concept of Co-Abundance groups is particularly interesting to check. Main re
 
 We first calculate Spearman's correlation for only ASVs identified in blanks that are also present in samples. 
 ```{r}
+library(factoextra)
+library(NMF)
 
 #spearman_tree & CAG_heat_tree are the same but in different order
 spearman_matrix <- cor(t(abundances(blnk.sample.asv)), method = "spearman")
 spearman_tree <- hclust(dist(spearman_matrix), method = "ward.D")
 #plot(spearman_tree)
 
-
-library(factoextra)
-library(NMF)
-
 set.seed(85723)
-clust <- fviz_nbclust(as.data.frame(spearman_matrix), kmeans, nstart = 25,  
-             method = "gap_stat", nboot = 500) +
+clust <- fviz_nbclust(as.data.frame(spearman_matrix), hcut, nstart = 25,  
+                      method = "gap_stat", nboot = 500) +
   labs(subtitle = "Gap statistic method")
-ggsave("controls/figs/clusters.pdf")
+ggsave("controls/figs/clustersHCUT.pdf")
+
+#clust <- fviz_nbclust(as.data.frame(spearman_matrix), kmeans, nstart = 25,  
+#                      method = "gap_stat", nboot = 500) +
+#  labs(subtitle = "Gap statistic method")
+#ggsave("controls/figs/clusters.pdf")
 CAG_n9 <- factor(cutree(spearman_tree, k = 9))
 
 # Figure S1
 CAG_heatmap <- aheatmap(spearman_matrix, 
-                       color = "-Spectral:100", 
-                       scale = "none", 
-                       breaks = NA, 
-                       Rowv=T, 
-                       Colv=T, 
-                       width=30, 
-                       height=16, 
-                       cexRow=1, 
-                       hclustfun = "ward", 
-                       main = "OTU co-ocurrences",
-                       distfun = "euclidean", 
-                       annRow = CAG_n9,
-                       filename = "controls/figs/cag_contaminats.pdf")
+                        color = "-Spectral:100", 
+                        scale = "none", 
+                        breaks = NA, 
+                        Rowv=T, 
+                        Colv=T, 
+                        width=30, 
+                        height=16, 
+                        cexRow=1, 
+                        hclustfun = "ward", 
+                        main = "OTU co-ocurrences",
+                        distfun = "euclidean", 
+                        annRow = CAG_n9,
+                        filename = "controls/figs/cag_contaminats.pdf")
+
+#check kmean clusters
+#perform k-means clustering with k = 4 clusters
+# km <- kmeans(as.data.frame(spearman_matrix), centers = 9, nstart = 25)
+
+#view results
+# km
 
 ```
 
