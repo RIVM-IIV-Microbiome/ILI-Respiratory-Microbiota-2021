@@ -19,5 +19,3 @@ Sudarshan A. Shetty<sup>1,2</sup>, Josine van Beek<sup>1</sup>, Elske Bijvank<su
   Josine van Beek; josine.van.beek[@]rivm[dot]nl   
   
   
-Note: Phyloseq object after `01_PrepPhyloseq` step is made available in `data/rds/ps.total.rds`. This can be used to redo analysis and create figures reported in manuscript from the step `02_DecontaminateMicrobiotaData` onwards.      
-
