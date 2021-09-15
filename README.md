@@ -15,7 +15,8 @@ Sudarshan A. Shetty<sup>1,2</sup>, Josine van Beek<sup>1</sup>, Elske Bijvank<su
   Sudarshan A. Shetty; sudarshan.shetty[@]rivm[dot]nl  
 
 **For information related to participants and related metadata:**    
-  Debbie van Baarle; d.van.baarle[@]umcg[dot]nl  
-  Josine van Beek; josine.van.beek[@]rivm[dot]nl   
+  Susana Fuentes; susana[dot]fuentes[at]rivm[dot]nl
+  Debbie van Baarle; d[dot]van[dot]baarle[at]umcg[dot]nl  
+  Josine van Beek; josine[dot]van[dot]beek[at]rivm[dot]nl   
   
   
