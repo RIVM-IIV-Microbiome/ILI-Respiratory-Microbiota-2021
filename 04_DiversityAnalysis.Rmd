@@ -54,7 +54,19 @@ dis_col <- c(acute_ili="#6883ba", control= "#166f65", `NA`="black",
 ## Import  
 
 ```{r}
-ps.main <- readRDS("data/rds/ps.clean.rds")
+#ps.main <- readRDS("data/rds/ps.clean.rds")
+
+#total.meta <- meta(ps.main) %>% 
+#  select(c(Sample_Name,SampleID,run_lib,sample_type,visit_id,source,condition_status,condition_group,gender,
+#           age_yrs_oct2014,age_yrs_2014,BMI_2014,ili_in_2014,participant_id,Sample,control,control_source))
+
+#ps.main.public <- ps.main
+
+#sample_data(ps.main.public) <- sample_data(total.meta)
+#saveRDS(ps.main.public, "data/rds/ps.clean.public.rds")
+ps.main <- readRDS("data/rds/ps.clean.public.rds")
+
+
 print_ps(ps.main)
 ```
 
@@ -180,6 +192,14 @@ Agglomerate at genus and save
 ps.main.genus <- tax_glom(ps.main, "Genus",NArm=FALSE)
 ```
 
+
+```{r}
+get_taxa_tibble(ps.main.genus) %>% 
+  filter(FeatureID %in% top_taxa(ps.main.genus, 10)) %>% 
+  select(c(FeatureID, Family, Genus))
+```
+
+
 Corynebacterium, Moraxella, Staphylococcus 
 
 ```{r}
@@ -207,6 +227,53 @@ sample_data(ps.main)$CM_ratio <- cory.abund/mora.abund
 saveRDS(ps.main.genus, "data/rds/ps.main.genus.rds")
 
 ```
+
+## For reviewer  
+```{r}
+# asv <- which(rownames(tax_table(ps.main.genus)["Genus"])) 
+cory.abund <- abundances(ps.main.genus, "compositional")["ASV1",]
+mora.abund <- abundances(ps.main.genus, "compositional")["ASV2",]
+dolo.abund <- abundances(ps.main.genus, "compositional")["ASV4",]
+stap.abund <- abundances(ps.main.genus, "compositional")["ASV5",]
+haem.abund <- abundances(ps.main.genus, "compositional")["ASV13",]
+
+top.tib <- tibble(Corynebacterium=cory.abund,
+                  Moraxella=mora.abund,
+                  Dolosigranulum=dolo.abund,
+                  Staphylococcus=stap.abund,
+                  Haemophilus=haem.abund)
+
+library(rstatix)
+cor.df <- cor_mat(
+  top.tib,
+  method = "spearman") %>% 
+  reshape2::melt()
+cor.df.pval <- cor_mat(
+  top.tib,
+  method = "spearman") %>% 
+  cor_get_pval()%>% 
+  reshape2::melt()
+
+all.cor <- cor.df %>% 
+  left_join(cor.df.pval, by = c("rowname","variable")) %>% 
+  filter(rowname!=variable) %>% 
+  group_by(variable) %>% 
+  arrange(value.x) %>% 
+  mutate(correlation=ifelse(value.x <0, "Negative", "Positive")) %>% 
+  ggplot(aes(value.x,rowname)) +
+  geom_col(aes(fill=correlation),
+           width = 0.5) +
+  scale_fill_brewer(palette = "Set2") +
+  facet_wrap(~variable, scales = "free_y") + 
+  theme_minimal() +
+  theme(panel.grid.minor = element_blank(),
+        strip.text = element_text(face="italic"),
+        axis.text.y = element_text(face="italic")) +
+  labs(x="Spearman's correlation", y="")
+ggsave("04_DiversityAnalysis/alpha_beta/top_five_correlation.pdf", h=5,w=8)
+```
+
+
 
 # Root tree 
 ```{r}
@@ -400,6 +467,20 @@ Control versus 14days ILI is significantly different in evenness.
 ## Statistics  
 
 ```{r}
+global.div.tb %>% 
+  #filter(name =="Simpson Evenness") %>% 
+  group_by(name, condition_status) %>% 
+  summarise(mean.alpha = mean(value),
+            median.alpha = median(value),
+            sd.alpha = sd(value)) %>% 
+  write_excel_csv("04_DiversityAnalysis/alpha_beta/alpha_summaries.csv")
+
+
+
+```
+
+
+```{r}
 
 global.div.tb %>% 
   filter(name =="Simpson Evenness") %>% 
@@ -511,7 +592,8 @@ p.uw <- plot_ordination_gg(ps.main.rar,
                                           distance =as.dist(guni_unweighted))) + 
   labs(subtitle = paste0("UnWeighted UniFrac", "\nANOSIM; R = ", round(anosim_unweighted$statistic, 5), " and p= ",
                          round(anosim_unweighted$signif, 5))) +
-  theme_minimal(base_size = 8) + theme(legend.position = "none")
+  theme_minimal(base_size = 8) + theme(legend.position = "none") +
+  stat_ellipse(geom = "polygon", level = 0.95, alpha=0.03, show.legend = FALSE)
 
 p.w0.5 <- plot_ordination_gg(ps.main.rar,  
                              ord = ordinate(ps.main.rar, "MDS", 
@@ -542,6 +624,38 @@ ord.plots <- (p.uw | p.w0.5 | p.w1) +
 ggsave("04_DiversityAnalysis/alpha_beta/all_GUniFrac_ordination.pdf", height = 4, width = 10)
 ggsave("04_DiversityAnalysis/alpha_beta/all_GUniFrac_ordination.tiff", height = 4, width = 10)
 ```
+
+## Reviewer-2  
+Plot centroids
+```{r}
+
+p.uw.cent <- plot_centroids(ps.main.rar, 
+                           ord = ordinate(ps.main.rar, "MDS", 
+                                          distance =as.dist(guni_unweighted))) + 
+  labs(subtitle = paste0("UnWeighted UniFrac", "\nANOSIM; R = ", round(anosim_unweighted$statistic, 5), " and p= ",
+                         round(anosim_unweighted$signif, 5))) +
+  theme_minimal(base_size = 8) + theme(legend.position = "none") 
+
+p.w0.5.cent <- plot_centroids(ps.main.rar,  
+                             ord = ordinate(ps.main.rar, "MDS", 
+                                            distance =as.dist(guni_weighted_0.5))) + 
+  labs(subtitle = paste0("GUniFrac", "\nANOSIM; R = ", round(anosim_gunifrac$statistic, 5), " and p= ",
+                         round(anosim_gunifrac$signif, 5)))+
+  theme_minimal(base_size = 8) + theme(legend.position = "none")
+
+
+
+p.w1.cent <- plot_centroids(ps.main.rar,  
+                           ordinate(ps.main.rar, "MDS", 
+                                    distance =as.dist(guni_weighted_1))) + 
+  labs(subtitle = paste0("Weighted UniFrac", "\nANOSIM; R = ", round(anosim_unifrac$statistic, 5), " and p= ",
+                         round(anosim_unifrac$signif, 5))) +
+  theme_minimal(base_size = 8) + theme(legend.position = "none")
+
+ord.plots.cent <- (p.uw.cent | p.w0.5.cent | p.w1.cent)
+ggsave("04_DiversityAnalysis/alpha_beta/R1_centroids_ordination.pdf", height = 3, width = 8)
+```
+
 
 In the comparisons above, the major variation between samples can be explained by dominant taxa. Presence absence of taxa does not have any significant impact on community level differences between groups.    
 

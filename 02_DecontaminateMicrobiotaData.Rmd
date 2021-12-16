@@ -72,7 +72,17 @@ ctrl_cols <- c(negative_control= "#7400b8", positive_control= "#ee6c4d" , Sample
 
 ```{r}
 
-ps.total <- readRDS("data/rds/ps.total.rds")
+#ps.total <- readRDS("data/rds/ps.total.rds")
+
+#total.meta <- meta(ps.total) %>% 
+#  select(c(Sample_Name,SampleID,run_lib,sample_type,visit_id,source,condition_status,condition_group,gender,
+#           age_yrs_oct2014,age_yrs_2014,BMI_2014,ili_in_2014,participant_id,Sample,control,control_source))
+
+#ps.total.public <- ps.total
+
+#sample_data(ps.total.public) <- sample_data(total.meta)
+#saveRDS(ps.total.public, "data/rds/ps.total.public.rds")
+ps.total <- readRDS("data/rds/ps.total.public.rds")
 
 # mislabelled zymo mocks
 ps.total <- prune_samples(!(sample_names(ps.total) %in% c( "075_078",
@@ -104,18 +114,31 @@ ps.tech <- prune_taxa(taxa_sums(ps.tech) > 0, ps.tech)
 ```
 
 Techincal controls have:  
-01] ntaxa = 1235  
-02] nsamples = 123    
-03] nsamplesvariables = 172  
-04] nranks = 7  
-05] Min. number of reads = 108  
-06] Max. number of reads = 64780   
-07] Total number of reads = 2368959  
-08] Average number of reads = 19259.83  
-09] Median number of reads = 17070  
-10] Sparsity = 0.960751785655508  
-11] Number of singletons = 45  
-12] % of taxa that are singletons (i.e. exactly one read detected across all samples) = 3.64372469635628  
+01] ntaxa = 1039
+02] nsamples = 118
+03] nsamplesvariables = 17
+04] nranks = 7
+05] Min. number of reads = 108
+06] Max. number of reads = 64780
+07] Total number of reads = 2194212
+08] Average number of reads = 18595.02
+09] Median number of reads = 16858
+10] Sparsity = 0.957651588065448
+11] Number of singletons = 45
+12] % of taxa that are singletons 
+  (i.e. exactly one read detected across all samples) = 4.33108758421559
+
+```{r}
+plot_taxa_heatmap(ps.tech, 
+                  transformation = "log10", 
+                  subset.top = 50,
+                  VariableA = c("control","control_source"),
+                  cluster_cols = T,
+                  show_colnames = F,
+                  filename="controls/figs/control_source_heatmap.pdf",
+                  height = 10, width = 14)
+```
+
 
 ```{r}
 ps.d <- subset_taxa(ps.total, Phylum == "Deinococcota")
@@ -131,8 +154,8 @@ plot_taxa_heatmap(ps.d, transformation = "log10", subset.top = 50,
 
 ### Samples   
 ```{r}
-#ps.sam <- subset_samples(ps.total, source !="oropharynx")
-ps.sam <- subset_samples(ps.total, is.na(control))
+ps.sam <- subset_samples(ps.total, source !="oropharynx")
+ps.sam <- subset_samples(ps.sam, is.na(control))
 ```
 
 There are still some samples with technical replicates and samples part of a different study. These will be removed. 
@@ -141,6 +164,28 @@ ps.naso <- prune_samples(!(sample_names(ps.sam) %in% c( "071_330",
                                                          "071_331",
                                                          "075_067",
                                                          "071_165")), ps.sam)
+```
+
+check for samples and controls together.
+```{r}
+ps.cont.sams <- ps.total
+sample_data(ps.cont.sams)$control.2 <- ifelse(is.na(sample_data(ps.cont.sams)$control), "sample", sample_data(ps.cont.sams)$control)
+oro.sams <- sample_names(subset_samples(ps.cont.sams, source =="oropharynx"))
+
+ps.cont.sams <- prune_samples(!(sample_names(ps.cont.sams) %in% c(oro.sams,
+                                                                  "071_330",
+                                                                  "071_331",
+                                                                  "075_067",
+                                                                  "071_165")), ps.cont.sams)
+
+plot_taxa_heatmap(ps.cont.sams, 
+                  transformation = "log10", 
+                  subset.top = 50,
+                  VariableA = c("control.2","control_source"),
+                  cluster_cols = T,
+                  show_colnames = F,
+                  filename="controls/figs/control_source_sampleheatmap.pdf",
+                  height = 10, width = 14)
 ```
 
 
@@ -176,21 +221,6 @@ ps.naso <- prune_taxa(taxa_sums(ps.naso)>0, ps.naso)
 We compare nasopharynx microbiota of subject with respiratory disease to those without (reported) disease. 
 
 Now, `r ntaxa(ps.naso)` ASVs are present in `nsamples(ps.naso)` samples at this step. 
-More details:  
-The nasophrynx samples consists of:  
-01] ntaxa = 9752  
-02] nsamples = 789  
-03] nsamplesvariables = 172  
-04] nranks = 7  
-05] Min. number of reads = 101  
-06] Max. number of reads = 86374  
-07] Total number of reads = 22580943  
-08] Average number of reads = 28619.7  
-09] Median number of reads = 28317  
-10] Sparsity = 0.982703102857066  
-11] Number of singletons = 43  
-12] % of taxa that are singletons (i.e. exactly one read detected across all samples) = 0.440935192780968  
-
 
 ### Make summary of phyloseq objects 
 
@@ -237,14 +267,14 @@ table(meta(ps1.control)$control_source)
 
 Controls
 `negative_control` = 45   
-`positive_control` = 78   
+`positive_control` = 73   
                              
 Sources of control:  
 `Blank` = 32 (DNA extraction negative control)   
 `MC_ATCC` = 15 (gDNA positive control)          
 `PCR blank` = 13 (PCR negative control)                                        
 `UMCU` = 10 (gDNA positive control)         
-`ZymoMC` = 53 (Includes both gDNA and cells positive control)    
+`ZymoMC` = 48 (Includes both gDNA and cells positive control)    
 
 The widely used Zymo mock was used in two ways for this study. Starting with gDNA and with Cells for DNA extraction.  
 
@@ -272,7 +302,7 @@ First look suggests while the community is consisting of expected taxa from Zymo
 
 
 
-249 taxa are remaining.  
+219 taxa are remaining.  
 *Pseudomonas aeruginosa*, *Escherichia coli*, *Salmonella enterica*, *Lactobacillus fermentum*, *Enterococcus faecalis*, *Staphylococcus aureus*, *Listeria monocytogenes*, *Bacillus subtilis*. 
 ```{r}
 #Staphylococcus aureus
@@ -403,7 +433,7 @@ p.sams.ctrls <- plot_taxa_heatmap(ps_cont,
                                   height = 12, width = 14)
 ```
 
-Among the top 50 are some ASVs that are prevlant and dominants in controls.  
+Among the top 50 are some ASVs that are prevalent and dominants in controls.  
 
 Some samples have library sizes in range of negative controls.  
 
@@ -426,12 +456,35 @@ DT::datatable(top.neg.asvs)
 This further supports cross contamination from between samples and negative controls. `ASV1:Corynebacterium` `ASV2:Moraxella` `ASV4:Dolosigranulum` `ASV5:Staphylococcus` could well be present in samples as they are known taxa from upper respiratory tract.  
 
 ```{r}
+# order samples by a column/variable in R
+blnk.dat <- meta(blnk.ps)
+unique(blnk.dat$control_source)
+blnk.dat <- blnk.dat %>% 
+  arrange(control_source)
+blnk.dat$control_source <- factor(blnk.dat$control_source, levels = c("Blank", "PCR blank"))
+bln.otutab <- abundances(blnk.ps)
+bln.otutab <- bln.otutab[,rownames(blnk.dat)]
+otu_table(blnk.ps) <- otu_table(bln.otutab, taxa_are_rows = T)
+sample_data(blnk.ps) <- sample_data(blnk.dat)
+
+topOTU <- top_taxa(blnk.ps, n = 50)
+
+library(RColorBrewer)
+
+p.h <- plot_taxa_heatmap_2(blnk.ps, 
+                           subset.top = 50, 
+                           transformation = "log10",
+                           VariableA = "control_source",
+                           cluster_cols = FALSE)
+annotation_row = data.frame(prevalence = p.h$prev)
+
 p.h <- plot_taxa_heatmap(blnk.ps, 
                          subset.top = 50, 
                          transformation = "log10",
                          VariableA = "control_source",
                          cluster_cols = FALSE,
-                         filename="controls/figs/blank_heatmap.pdf",
+                         annotation_row = annotation_row,
+                         filename="controls/figs/blank_heatmap_prev.pdf",
                          height = 10, width = 14)
 
 ```
