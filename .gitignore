@@ -37,3 +37,6 @@ vignettes/*.pdf
 
 # R Environment Variables
 .Renviron
+*.pdf
+04_DiversityAnalysis/alpha_beta/R_Fig_1.svg
+*.svg
