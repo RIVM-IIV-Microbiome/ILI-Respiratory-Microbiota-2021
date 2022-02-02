@@ -153,6 +153,7 @@ calculate_gunifrac_anosim <- function(ps, dist, comparisons){
 
 plot_ordination_gg <- function(ps, ord){
   
+  std.erF <- function(z)sd(z)/sqrt(length(z)) # function to calculate std.err
   ordip <- plot_ordination(ps, ord, justDF = T)
   # Get axis 1 and 2 variation
   evals1 <- round(ord$values$Eigenvalues[1] / sum(ord$values$Eigenvalues) * 100, 2)
